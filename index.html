@@ -4,12 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <!-- Mode plein écran (sans barre d'adresse) une fois l'application "ajoutée à l'écran d'accueil" sur mobile.
-     Le manifeste PWA correspondant est généré dynamiquement plus bas, une fois le logo chargé en mémoire. -->
+     Manifeste PWA statique (fichier manifest.json séparé, avec un "id" et un scope en chemin absolu
+     /doxal-rtm/) pour que l'application reste strictement distincte de toute autre appli hébergée
+     sous pragmatik0210.github.io (ex. l'application de gestion de crédit), même en même origine. -->
 <meta name="theme-color" content="#2a78d6">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="DOXAL RTM">
+<link rel="manifest" href="manifest.json">
 <title>DOXAL — RTM Intelligence</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -312,32 +315,6 @@ const LOGO_LOCKUP = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMC
   }
   setAppIcon('icon', LOGO_ICON);
   setAppIcon('apple-touch-icon', LOGO_ICON);
-})();
-
-/* Manifeste PWA généré dynamiquement (réutilise LOGO_ICON déjà en mémoire, sans re-déclarer le logo).
-   Une fois l'application "ajoutée à l'écran d'accueil" depuis un téléphone, elle s'ouvre en mode plein
-   écran, sans la barre d'adresse du navigateur — cela ne change rien pour une simple visite dans un onglet. */
-(function(){
-  function applyManifest(sizes){
-    var manifest = {
-      name: "DOXAL — RTM Intelligence",
-      short_name: "DOXAL RTM",
-      start_url: ".",
-      scope: ".",
-      display: "standalone",
-      background_color: "#f9f9f7",
-      theme_color: "#2a78d6",
-      icons: [{ src: LOGO_ICON, sizes: sizes, type: "image/jpeg", purpose: "any" }]
-    };
-    var blob = new Blob([JSON.stringify(manifest)], {type: 'application/json'});
-    var link = document.querySelector('link[rel="manifest"]');
-    if(!link){ link = document.createElement('link'); link.rel = 'manifest'; document.head.appendChild(link); }
-    link.href = URL.createObjectURL(blob);
-  }
-  var img = new Image();
-  img.onload = function(){ applyManifest(img.naturalWidth + "x" + img.naturalHeight); };
-  img.onerror = function(){ applyManifest("192x192"); };
-  img.src = LOGO_ICON;
 })();
 
 /* Déclenche un téléchargement standard du navigateur (export Excel / PDF). */

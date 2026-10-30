@@ -803,17 +803,15 @@ async function boot(){
     subscribeCollection('fichesSuperviseur', APP.fiches, {orderBy:'date', limit:300});
     subscribeCollection('relevesPrix', APP.relevesPrix, {orderBy:'date', limit:300});
   }
-  restoreSession();
+  // Par sécurité, aucune session n'est conservée d'une ouverture à l'autre : à chaque lancement de
+  // l'application (icône sur l'écran d'accueil ou nouvel onglet), l'identifiant et le mot de passe
+  // doivent être ressaisis. On nettoie aussi une éventuelle ancienne session mémorisée (versions
+  // précédentes de l'application) pour qu'elle ne reconnecte plus personne automatiquement.
+  clearSession();
   window.addEventListener('hashchange', ()=>{ APP.route = location.hash || null; render(); });
   scheduleRender();
 }
-function restoreSession(){
-  try{
-    const saved = localStorage.getItem('rtm_profile_id');
-    if(saved){ APP.currentUser = {id: saved}; } // resolved fully once profils load, in render()
-  }catch(e){}
-}
-function saveSession(id){ try{ localStorage.setItem('rtm_profile_id', id); }catch(e){} }
+function saveSession(id){ /* Session volontairement non mémorisée : connexion requise à chaque ouverture. */ }
 function clearSession(){ try{ localStorage.removeItem('rtm_profile_id'); }catch(e){} APP.currentUser = null; }
 
 /* ============================== DERIVED DATA ============================== */

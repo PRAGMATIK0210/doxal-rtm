@@ -1091,6 +1091,7 @@ function navFor(user){
   }
   if(user.role==='direction'){
     return [
+      {r:'#/scan', l:'Scanner un client', i:'camera'},
       {r:'#/comptes', l:'Comptes à créer', i:'idcard'},
       {r:'#/activite', l:'Activité générale', i:'journal'},
       {r:'#/superviseurs', l:'Suivi des superviseurs', i:'clipboard'},
@@ -1102,6 +1103,7 @@ function navFor(user){
   }
   if(user.role==='adv'){
     return [
+      {r:'#/scan', l:'Scanner un client', i:'camera'},
       {r:'#/comptes', l:'Comptes à créer', i:'idcard'},
       {r:'#/activite', l:'Activité générale', i:'journal'},
       {r:'#/equipe', l:'Vue équipe', i:'team'},
@@ -1125,7 +1127,7 @@ const PAGE_TITLES = {
   '#/base-clients':'Base de données clients', '#/carte':'Carte clients',
   '#/mes-stats':'Mes statistiques', '#/fiche':'Fiche de suivi superviseur', '#/journal':'Journal d\'activité superviseur', '#/pricing':'Pricing marché', '#/equipe':'Vue équipe',
   '#/dashboard':'Tableau de bord', '#/comptes':'Comptes à créer', '#/activite':'Activité générale',
-  '#/superviseurs':'Suivi des superviseurs',
+  '#/superviseurs':'Suivi des superviseurs', '#/scan':'Scanner un client',
 };
 
 function renderShellHTML(user){
@@ -1189,7 +1191,35 @@ function renderRoute(content, user, route){
   if(route==='#/comptes') return renderComptesAValider(content, user);
   if(route==='#/activite') return renderActiviteGenerale(content, user);
   if(route==='#/superviseurs') return renderSuiviSuperviseurs(content, user);
+  if(route==='#/scan') return renderScanClient(content, user);
   content.innerHTML = `<div class="empty-state">Page introuvable.</div>`;
+}
+
+/* ============================== SCAN QR DIRECT (ADV / DIRECTION) ============================== */
+/* Accès direct depuis le menu latéral : ouvre immédiatement la caméra pour scanner le QR code
+   d'un client et consulter son historique (passages commerciaux + superviseurs, ventes, date et heure). */
+function renderScanClient(content, user){
+  function launchScan(){
+    openQrScanner({
+      hint: 'Visez le QR code collé chez le client pour ouvrir sa fiche.',
+      onResult: (clientId)=> openClientModal(clientId, user),
+    });
+  }
+  content.innerHTML = `
+    <div class="page-head">
+      <div><h1>Scanner un client</h1>
+        <p class="page-sub">Vérifiez en un scan les passages et les ventes chez un client.</p></div>
+    </div>
+    <div class="card" style="max-width:560px;">
+      <div class="card-title">${icon('camera')} Scanner le QR code du client</div>
+      <p class="helptext" style="margin:8px 0 16px;">Scannez le QR code collé chez un client pour ouvrir directement sa fiche : vous y verrez quel commercial est passé, les ventes effectuées et quel superviseur est passé, avec la date et l'heure de chaque passage.</p>
+      <button class="btn primary" id="go-scan-direct">${icon('camera')} Scanner un client</button>
+    </div>
+  `;
+  const btn = content.querySelector('#go-scan-direct');
+  if(btn) btn.addEventListener('click', launchScan);
+  // Ouvre la caméra immédiatement : l'utilisateur vient de cliquer sur "Scanner un client" dans le menu.
+  launchScan();
 }
 
 /* ============================== DEMO BANNER ============================== */

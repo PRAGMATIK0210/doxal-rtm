@@ -891,6 +891,20 @@ function modeVisiteLabel(m, short){
   if(m==='seul') return 'Seul(e)';
   return short ? 'Avec com.' : 'Avec commercial';
 }
+function positionStatus(gps){
+  // Statut de position partagé par tous les affichages (web + exports Excel/PDF) : au-delà de
+  // 300 m du point de vente enregistré, ou si la position n'a pas pu être vérifiée du tout, le
+  // passage est signalé comme potentiellement effectué à distance (pas sur place, chez le client).
+  if(!gps) return {ok:null, label:'Position non vérifiée', cls:'muted'};
+  if(gps.distanceM==null) return {ok:null, label:'Position capturée', cls:'good'};
+  if(gps.distanceM<=300) return {ok:true, label:'Sur place · '+gps.distanceM+' m', cls:'good'};
+  return {ok:false, label:'Visite à distance · '+gps.distanceM+' m', cls:'critical'};
+}
+function positionBadge(gps){
+  const s = positionStatus(gps);
+  const prefix = s.ok===false ? '⚠ ' : (s.ok===true ? '✓ ' : '');
+  return '<span class="status-pill '+s.cls+'">'+prefix+s.label+'</span>';
+}
 function filteredVisites({commercialId, secteur, sinceISO, toISO}){
   return [...APP.visites.values()].filter(v=>{
     if(sinceISO && v.date < sinceISO) return false;
@@ -1328,7 +1342,7 @@ function renderHistorique(content, user){
         ${day.map(v=>{ const c = APP.clients.get(v.clientId);
           const heure = v.timestamp ? fmtDateTimeFR(v.timestamp).split(' ')[1]||'' : '';
           const detail = v.statut==='vendu' ? fmtFCFA(v.montantTotal) : (v.raisonNonAchat||'—');
-          const pos = v.gps ? (v.gps.distanceM<=300?`<span class="status-pill good">✓ ${v.gps.distanceM} m</span>`:`<span class="status-pill warning">${v.gps.distanceM} m</span>`) : '—';
+          const pos = positionBadge(v.gps);
           return `<tr><td class="num">${heure}</td><td>${c?escapeHtml(c.nom):'—'}</td><td>${c?escapeHtml(c.zone):'—'}</td>
             <td>${v.statut==='vendu'?'<span class="status-pill good">Vendu</span>':'<span class="status-pill critical">Non vendu</span>'}</td>
             <td class="num">${detail}</td><td>${pos}</td></tr>`;
@@ -1523,13 +1537,13 @@ function openClientModal(clientId, user, autoShowQr){
         <td>${co?escapeHtml(co.nom):'—'}</td>
         <td>${v.statut==='vendu'?'<span class="status-pill good">Vendu</span>':'<span class="status-pill critical">Non vendu</span>'}</td>
         <td class="num">${v.statut==='vendu'?fmtFCFA(v.montantTotal):(v.raisonNonAchat||'—')}</td>
-        <td>${v.gps ? (v.gps.distanceM<=300?`<span class="status-pill good">✓ ${v.gps.distanceM} m</span>`:`<span class="status-pill warning">${v.gps.distanceM} m</span>`) : '—'}</td></tr>`;}).join('')}
+        <td>${positionBadge(v.gps)}</td></tr>`;}).join('')}
       </tbody></table></div>` : `<div class="helptext">Aucun passage commercial enregistré pour ce client.</div>`}
     </div>
 
     <div class="card" style="padding:12px 14px;">
       <div class="card-title" style="margin-bottom:8px;">Historique des passages superviseur</div>
-      ${histFiches.length ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Heure</th><th>Superviseur</th><th>Mode</th><th>Commercial vérifié</th></tr></thead><tbody>
+      ${histFiches.length ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Heure</th><th>Superviseur</th><th>Mode</th><th>Commercial vérifié</th><th>Position</th></tr></thead><tbody>
         ${histFiches.map(f=>{
           const sup = APP.profils.get(f.superviseurId);
           const co = f.commercialId ? APP.profils.get(f.commercialId) : null;
@@ -1539,7 +1553,8 @@ function openClientModal(clientId, user, autoShowQr){
           return `<tr><td>${fmtDateFR(f.date)}</td><td>${f.timestamp?fmtDateTimeFR(f.timestamp).split(' ')[1]||'—':'—'}</td>
           <td>${sup?escapeHtml(sup.nom):'—'}</td>
           <td>${modeLabel}</td>
-          <td>${f.commercialVerifie?'<span class="status-pill good">✓ Oui</span>':'<span class="status-pill muted">—</span>'}</td></tr>`;
+          <td>${f.commercialVerifie?'<span class="status-pill good">✓ Oui</span>':'<span class="status-pill muted">—</span>'}</td>
+          <td>${positionBadge(f.gps)}</td></tr>`;
         }).join('')}
       </tbody></table></div>` : `<div class="helptext">Aucun passage superviseur enregistré pour ce client.</div>`}
     </div>
@@ -1646,9 +1661,9 @@ function renderVisitForm(box, c, user, existing, backdrop){
         </select>
       </label>
       <div class="gps-box" id="gps-box" style="margin:10px 0;">
-        ${gps ? `<b>${gps.distanceM<=300?'✓ Position confirmée':'⚠ Position éloignée'}</b> · ${gps.distanceM} m du client enregistré`
-              : `Vérifiez votre position pour confirmer la visite.`}
-        <div style="margin-top:6px;"><button class="btn sm" id="gps-btn">${icon('pin')} Vérifier ma position</button></div>
+        ${gps ? `<b>${gps.distanceM<=300?'✓ Position confirmée':'⚠ Visite à distance'}</b> · ${gps.distanceM} m du client enregistré${gps.distanceM>300?' — ce passage sera signalé comme « à distance » à l\'ADV et à la direction.':''}`
+              : `Localisation en cours pour confirmer la visite…`}
+        <div style="margin-top:6px;"><button class="btn sm" id="gps-btn">${icon('pin')} ${gps?'Revérifier':'Vérifier'} ma position</button></div>
       </div>
       <button class="btn primary" id="submit-visit" style="width:100%;justify-content:center;">Enregistrer le passage</button>
     `;
@@ -1720,6 +1735,11 @@ function renderVisitForm(box, c, user, existing, backdrop){
     }catch(e){ toast('Échec de l\'enregistrement.', 'critical'); btn.disabled=false; btn.textContent='Enregistrer le passage'; }
   }
   renderInner();
+  // Vérification automatique de la position dès l'ouverture de la fiche, pour fiabiliser la
+  // détection d'une éventuelle visite à distance sans dépendre d'un clic manuel du commercial
+  // (le bouton reste disponible pour revérifier si la localisation échoue ou est refusée).
+  const autoGpsBtn = box.querySelector('#gps-btn');
+  if(autoGpsBtn) autoGpsBtn.click();
 }
 
 /* ============================== NOUVEAU CLIENT ============================== */
@@ -1825,14 +1845,21 @@ function buildProduitsChecklist(container){
   });
   return chosen;
 }
-function wireGpsCapture(box, btnSel, boxSel){
+function wireGpsCapture(box, btnSel, boxSel, clientRef){
+  // clientRef (facultatif) : client déjà existant dont la position (lat/lng) est enregistrée.
+  // Quand il est fourni, on calcule la distance entre la position captée et celle du client,
+  // exactement comme pour le passage commercial, afin de détecter une éventuelle visite à distance.
   let gps = { value: null };
   box.querySelector(btnSel).addEventListener('click', ()=>{
     const btn = box.querySelector(btnSel);
     btn.disabled = true; btn.textContent = 'Localisation…';
     getPositionWithFallback(pos=>{
       gps.value = {lat:pos.coords.latitude, lng:pos.coords.longitude};
-      box.querySelector(boxSel).innerHTML = `<span class="status-pill good">✓ Position capturée</span>`;
+      if(clientRef && clientRef.lat!=null && clientRef.lng!=null){
+        gps.value.distanceM = Math.round(haversineM(pos.coords.latitude, pos.coords.longitude, clientRef.lat, clientRef.lng));
+      }
+      box.querySelector(boxSel).innerHTML = positionBadge(gps.value);
+      btn.disabled = false; btn.textContent = `${icon('pin')} Revérifier ma position`;
     }, err=>{
       toast('Position indisponible : '+(err.message||'refusée'), 'warning');
       btn.disabled = false; btn.textContent = `${icon('pin')} Réessayer`;
@@ -1977,12 +2004,14 @@ function renderAvecClient(box, content, user, commercialId, preselect){
       </div>
       <div class="divider"></div>
       <label class="field">Notes<textarea id="fa-notes" placeholder="Observations libres…"></textarea></label>
-      <div class="gps-box" style="margin-top:12px;" id="fa-gps">Aucune position capturée. <button class="btn sm" id="fa-gps-btn">${icon('pin')} Capturer ma position</button></div>
+      <div class="gps-box" style="margin-top:12px;" id="fa-gps">Localisation en cours… <button class="btn sm" id="fa-gps-btn">${icon('pin')} Capturer ma position</button></div>
       <button class="btn primary" id="fa-submit" style="margin-top:16px;width:100%;justify-content:center;">Enregistrer la fiche</button>
     `;
     const chosenProduits = buildProduitsChecklist(rest.querySelector('#fa-produits'));
     const chosenConcurrents = buildConcurrentsChecklist(rest.querySelector('#fa-concurrents'));
-    const gps = wireGpsCapture(rest, '#fa-gps-btn', '#fa-gps');
+    const gps = wireGpsCapture(rest, '#fa-gps-btn', '#fa-gps', c);
+    // Vérification automatique dès l'ouverture de la fiche, comme pour le passage commercial.
+    const faGpsBtn = rest.querySelector('#fa-gps-btn'); if(faGpsBtn) faGpsBtn.click();
     rest.querySelector('#fa-submit').addEventListener('click', async ()=>{
       if(!APP.db) return;
       const btn = rest.querySelector('#fa-submit'); btn.disabled=true; btn.textContent='Enregistrement…';
@@ -2133,12 +2162,14 @@ function renderSansClient(box, content, user, preselect){
       </div>
       <div class="divider"></div>
       <label class="field">Notes<textarea id="fs-notes" placeholder="Observations libres…"></textarea></label>
-      <div class="gps-box" style="margin-top:12px;" id="fs-gps">Aucune position capturée. <button class="btn sm" id="fs-gps-btn">${icon('pin')} Capturer ma position</button></div>
+      <div class="gps-box" style="margin-top:12px;" id="fs-gps">Localisation en cours… <button class="btn sm" id="fs-gps-btn">${icon('pin')} Capturer ma position</button></div>
       <button class="btn primary" id="fs-submit" style="margin-top:16px;width:100%;justify-content:center;">Enregistrer la fiche</button>
     `;
     const chosenProduits = buildProduitsChecklist(rest.querySelector('#fs-produits'));
     const chosenConcurrents = buildConcurrentsChecklist(rest.querySelector('#fs-concurrents'));
-    const gps = wireGpsCapture(rest, '#fs-gps-btn', '#fs-gps');
+    const gps = wireGpsCapture(rest, '#fs-gps-btn', '#fs-gps', c);
+    // Vérification automatique dès l'ouverture de la fiche, comme pour le passage commercial.
+    const fsGpsBtn = rest.querySelector('#fs-gps-btn'); if(fsGpsBtn) fsGpsBtn.click();
     rest.querySelector('#fs-submit').addEventListener('click', async ()=>{
       if(!APP.db) return;
       const btn = rest.querySelector('#fs-submit'); btn.disabled=true; btn.textContent='Enregistrement…';
@@ -2280,7 +2311,7 @@ function renderJournalSuperviseur(content, user){
         const co = APP.profils.get(f.commercialId);
         const type = isProspectionMode(f.modeVisite) ? '<span class="status-pill warning">Nouveau prospect</span>' : '<span class="status-pill good">Client existant</span>';
         const verif = isProspectionMode(f.modeVisite) ? '—' : (f.commercialVerifie ? '<span class="status-pill good">✓ Oui</span>' : '<span class="status-pill critical">Non</span>');
-        const pos = f.gps ? '<span class="status-pill good">✓ Capturée</span>' : '—';
+        const pos = positionBadge(f.gps);
         return `<tr data-client="${f.clientId}"><td>${fmtDateFR(f.date)}</td><td>${modeVisiteLabel(f.modeVisite)}</td><td>${c?escapeHtml(c.secteur||''):'—'}</td>
           <td>${c?escapeHtml(c.nom):'—'}</td><td>${type}</td><td>${co?escapeHtml(co.nom):'—'}</td>
           <td class="num">${(f.produitsPresents||[]).length}</td>
@@ -2355,7 +2386,7 @@ async function exportJournalSuperviseurExcel(user, rows){
         CommercialConcerne: co?co.nom:'', ProduitsReleves: (f.produitsPresents||[]).map(id=>(APP.produits.get(id)||{}).nom).join(', '),
         Concurrence: f.concurrence||'',
         CommercialVerifie: isProspectionMode(f.modeVisite)?'—':(f.commercialVerifie?'Oui':'Non'),
-        Position: f.gps?'Capturée':'Non capturée', Notes: f.notes||'',
+        Position: positionStatus(f.gps).label, Notes: f.notes||'',
       };
     });
     const wb = XLSX.utils.book_new();
@@ -2647,7 +2678,7 @@ function openCommercialHistoryModal(commercialId, viewerUser){
         ${day.map(v=>{ const c = APP.clients.get(v.clientId);
           const heure = v.timestamp ? fmtDateTimeFR(v.timestamp).split(' ')[1]||'' : '';
           const detail = v.statut==='vendu' ? fmtFCFA(v.montantTotal) : (v.raisonNonAchat||'—');
-          const pos = v.gps ? (v.gps.distanceM<=300?`<span class="status-pill good">✓ ${v.gps.distanceM} m</span>`:`<span class="status-pill warning">${v.gps.distanceM} m</span>`) : '—';
+          const pos = positionBadge(v.gps);
           return `<tr><td class="num">${heure}</td><td>${c?escapeHtml(c.nom):'—'}</td><td>${c?escapeHtml(c.zone):'—'}</td>
             <td>${v.statut==='vendu'?'<span class="status-pill good">Vendu</span>':'<span class="status-pill critical">Non vendu</span>'}</td>
             <td class="num">${detail}</td><td>${pos}</td></tr>`;
@@ -2868,7 +2899,7 @@ async function exportExcel(){
       Statut:v.statut, Montant:v.montantTotal||0, Raison:v.raisonNonAchat||'',
       Produits:(v.produitsVendus||[]).map(id=>(APP.produits.get(id)||{}).nom||id).join(', '),
       Concurrence: v.concurrence||'',
-      DistanceGPS_m: v.gps?v.gps.distanceM:'',
+      DistanceGPS_m: v.gps&&v.gps.distanceM!=null?v.gps.distanceM:'', Position: positionStatus(v.gps).label,
     }));
     const fichesRows = [...APP.fiches.values()].map(f=>({
       Date:f.date, Superviseur:(APP.profils.get(f.superviseurId)||{}).nom||'', Commercial:(APP.profils.get(f.commercialId)||{}).nom||'',
@@ -2876,7 +2907,7 @@ async function exportExcel(){
       ProduitsPresents:(f.produitsPresents||[]).map(id=>(APP.produits.get(id)||{}).nom).join(', '),
       Concurrence: f.concurrence||'',
       Prospectes:(f.clientsProspectes||[]).map(p=>p.nom).join(', '), NouveauxClients:(f.nouveauxClients||[]).map(n=>n.nom).join(', '),
-      Notes:f.notes||'',
+      Position: positionStatus(f.gps).label, Notes:f.notes||'',
     }));
     const ym = todayDate().getFullYear()+'-'+pad2(todayDate().getMonth()+1);
     const objRows = [...APP.clients.values()].map(c=>({
@@ -3291,21 +3322,21 @@ function renderActiviteGenerale(content, user){
 
     const vBox = content.querySelector('#ag-visites');
     const vRows = visites.slice(0,60);
-    vBox.innerHTML = vRows.length ? `<table><thead><tr><th>Date</th><th>Commercial</th><th>Client</th><th>Statut</th><th>Montant</th></tr></thead><tbody>
+    vBox.innerHTML = vRows.length ? `<table><thead><tr><th>Date</th><th>Commercial</th><th>Client</th><th>Statut</th><th>Montant</th><th>Position</th></tr></thead><tbody>
       ${vRows.map(v=>{ const co=APP.profils.get(v.commercialId); const cl=APP.clients.get(v.clientId);
         return `<tr data-client="${v.clientId}" style="cursor:pointer;"><td>${fmtDateFR(v.date)}</td><td>${co?escapeHtml(co.nom):'—'}</td><td>${cl?escapeHtml(cl.nom):'—'}</td>
         <td>${v.statut==='vendu'?'<span class="status-pill good">Vendu</span>':'<span class="status-pill critical">Non vendu</span>'}</td>
-        <td class="num">${v.statut==='vendu'?fmtFCFA(v.montantTotal):'—'}</td></tr>`; }).join('')}
+        <td class="num">${v.statut==='vendu'?fmtFCFA(v.montantTotal):'—'}</td><td>${positionBadge(v.gps)}</td></tr>`; }).join('')}
     </tbody></table>` : `<div class="empty-state">Aucun passage pour cette période / ce secteur.</div>`;
     vBox.querySelectorAll('[data-client]').forEach(row=>row.addEventListener('click', ()=>openClientModal(row.getAttribute('data-client'), user)));
 
     const fBox = content.querySelector('#ag-fiches');
     const fRows = fiches.slice(0,60);
-    fBox.innerHTML = fRows.length ? `<table><thead><tr><th>Date</th><th>Superviseur</th><th>Commercial</th><th>Client</th><th>Mode</th><th>Concurrence</th></tr></thead><tbody>
+    fBox.innerHTML = fRows.length ? `<table><thead><tr><th>Date</th><th>Superviseur</th><th>Commercial</th><th>Client</th><th>Mode</th><th>Concurrence</th><th>Position</th></tr></thead><tbody>
       ${fRows.map(f=>{ const sup=APP.profils.get(f.superviseurId); const co=APP.profils.get(f.commercialId); const cl=APP.clients.get(f.clientId);
         return `<tr data-client="${f.clientId||''}" style="cursor:${f.clientId?'pointer':'default'};"><td>${fmtDateFR(f.date)}</td><td>${sup?escapeHtml(sup.nom):'—'}</td><td>${co?escapeHtml(co.nom):'—'}</td>
         <td>${cl?escapeHtml(cl.nom):'—'}</td><td>${modeVisiteLabel(f.modeVisite, true)}</td>
-        <td class="helptext" style="max-width:160px;white-space:normal;">${escapeHtml((f.concurrence||'').slice(0,90))||'—'}</td></tr>`; }).join('')}
+        <td class="helptext" style="max-width:160px;white-space:normal;">${escapeHtml((f.concurrence||'').slice(0,90))||'—'}</td><td>${positionBadge(f.gps)}</td></tr>`; }).join('')}
     </tbody></table>` : `<div class="empty-state">Aucune fiche pour cette période / ce secteur.</div>`;
     fBox.querySelectorAll('[data-client]').forEach(row=>{ const cid=row.getAttribute('data-client'); if(cid) row.addEventListener('click', ()=>openClientModal(cid, user)); });
   }

@@ -864,6 +864,10 @@ function realizedForClientMonth(clientId, ym){
     .reduce((s,v)=>s+(v.montantTotal||0),0);
 }
 function suggestObjective(clientId){
+  // Les clients équipés d'un frigo ont un objectif fixe (et non calculé sur l'historique) :
+  // 150 000 FCFA par mois, quel que soit leur volume d'achats passé.
+  const frigoClient = APP.clients.get(clientId);
+  if(frigoClient && frigoClient.aFrigo) return 150000;
   // Objectif lissé sur l'historique des achats du client : lissage exponentiel sur les 6 derniers
   // mois (les mois les plus récents pèsent davantage), avec une marge de progression de +10%.
   const now = todayDate();
@@ -1072,6 +1076,7 @@ function navFor(user){
     return [
       {r:'#/tournee', l:'Ma tournée du jour', i:'route'},
       {r:'#/base-clients', l:'Base de données clients', i:'db'},
+      {r:'#/frigo', l:'Clients avec frigo', i:'fridge'},
       {r:'#/carte', l:'Carte clients', i:'map'},
       {r:'#/prospects', l:'Historique de prospection', i:'userplus'},
       {r:'#/historique', l:'Historique des tournées', i:'history'},
@@ -1087,6 +1092,7 @@ function navFor(user){
       {r:'#/equipe', l:'Vue équipe', i:'team'},
       {r:'#/dashboard', l:'Tableau de bord', i:'chart'},
       {r:'#/base-clients', l:'Base de données clients', i:'db'},
+      {r:'#/frigo', l:'Clients avec frigo', i:'fridge'},
       {r:'#/carte', l:'Carte clients', i:'map'},
     ];
   }
@@ -1098,6 +1104,7 @@ function navFor(user){
       {r:'#/equipe', l:'Vue équipe', i:'team'},
       {r:'#/dashboard', l:'Tableau de bord', i:'chart'},
       {r:'#/base-clients', l:'Base de données clients', i:'db'},
+      {r:'#/frigo', l:'Clients avec frigo', i:'fridge'},
       {r:'#/carte', l:'Carte clients', i:'map'},
     ];
   }
@@ -1108,12 +1115,13 @@ function navFor(user){
     {r:'#/equipe', l:'Vue équipe', i:'team'},
     {r:'#/dashboard', l:'Tableau de bord', i:'chart'},
     {r:'#/base-clients', l:'Base de données clients', i:'db'},
+    {r:'#/frigo', l:'Clients avec frigo', i:'fridge'},
     {r:'#/carte', l:'Carte clients', i:'map'},
   ];
 }
 const PAGE_TITLES = {
   '#/tournee':'Ma tournée du jour', '#/historique':'Historique des tournées', '#/prospects':'Historique de prospection',
-  '#/base-clients':'Base de données clients', '#/carte':'Carte clients',
+  '#/base-clients':'Base de données clients', '#/carte':'Carte clients', '#/frigo':'Clients avec frigo',
   '#/mes-stats':'Mes statistiques', '#/fiche':'Fiche de suivi superviseur', '#/journal':'Journal d\'activité superviseur', '#/pricing':'Pricing marché', '#/equipe':'Vue équipe',
   '#/dashboard':'Tableau de bord', '#/comptes':'Comptes à créer', '#/activite':'Activité générale',
   '#/superviseurs':'Suivi des superviseurs', '#/scan':'Scanner un client',
@@ -1171,6 +1179,7 @@ function renderRoute(content, user, route){
   if(route==='#/prospects') return renderJournalProspects(content, user);
   if(route==='#/base-clients') return renderClientsDB(content, user);
   if(route==='#/carte') return renderClientsCarte(content, user);
+  if(route==='#/frigo') return renderClientsFrigo(content, user);
   if(route==='#/mes-stats') return renderDashboard(content, user, {scope:'me'});
   if(route==='#/fiche') return renderFiche(content, user);
   if(route==='#/journal') return renderJournalSuperviseur(content, user);
@@ -3219,6 +3228,68 @@ function renderClientsCarte(content, user){
   content.querySelector('#filter-secteur').addEventListener('change', apply);
   content.querySelector('#filter-statut').addEventListener('change', apply);
   content.querySelector('#filter-frigo').addEventListener('change', apply);
+  apply();
+}
+
+function renderClientsFrigo(content, user){
+  // Fenêtre dédiée aux clients équipés d'un frigo, disponible pour les 4 rôles : le commercial y
+  // voit son propre portefeuille, les autres rôles (superviseur, ADV, direction) voient l'ensemble
+  // des clients frigo de l'organisation, comme pour la Base de données clients et la Carte clients.
+  const isCommercial = user.role==='commercial';
+  const list = (isCommercial ? [...APP.clients.values()].filter(c=>c.commercialId===user.id) : [...APP.clients.values()])
+    .filter(c=>c.aFrigo && c.statut==='actif');
+  const ym = todayDate().getFullYear()+'-'+pad2(todayDate().getMonth()+1);
+  content.innerHTML = `
+    ${demoBannerHTML()}
+    <div class="page-head"><div><h1>Clients avec frigo</h1><p class="page-sub">${list.length} client${list.length>1?'s':''} équipé${list.length>1?'s':''} d'un frigo${isCommercial?' dans votre portefeuille':''}</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        ${!isCommercial ? `<select id="ff-commercial"><option value="">Tous les commerciaux</option>${[...APP.profils.values()].filter(p=>p.role==='commercial').map(p=>`<option value="${p.id}">${escapeHtml(p.nom)}</option>`).join('')}</select>` : ''}
+        <select id="ff-secteur"><option value="">Tous les secteurs</option>${SECTEUR_NAMES.map(s=>`<option>${escapeHtml(s)}</option>`).join('')}</select>
+      </div>
+    </div>
+    <div class="banner" style="margin-bottom:14px;">${icon('fridge')} Tout client équipé d'un frigo reçoit automatiquement un objectif mensuel fixe de ${fmtNum(150000)} FCFA, quel que soit son historique d'achats.</div>
+    <div class="kpi-grid" id="ff-kpis" style="margin-bottom:16px;"></div>
+    <div class="card"><div class="table-wrap" id="ff-table"></div></div>
+  `;
+  wireDemoBanner(content);
+  function apply(){
+    const com = content.querySelector('#ff-commercial') ? content.querySelector('#ff-commercial').value : '';
+    const sec = content.querySelector('#ff-secteur').value;
+    const filtered = list.filter(c=> (!com||c.commercialId===com) && (!sec||c.secteur===sec));
+    const rows = filtered.map(c=>{
+      const objectif = suggestObjective(c.id);
+      const realise = realizedForClientMonth(c.id, ym);
+      const pct = Math.min(100, Math.round(realise/Math.max(objectif,1)*100));
+      return { c, objectif, realise, pct };
+    }).sort((a,b)=>b.pct-a.pct);
+    const atteints = rows.filter(r=>r.pct>=100).length;
+    const caTotal = rows.reduce((s,r)=>s+r.realise,0);
+    const pctMoy = rows.length ? Math.round(rows.reduce((s,r)=>s+r.pct,0)/rows.length) : 0;
+    content.querySelector('#ff-kpis').innerHTML = `
+      <div class="kpi-tile"><div class="kpi-label">Clients avec frigo</div><div class="kpi-value">${rows.length}</div></div>
+      <div class="kpi-tile"><div class="kpi-label">CA généré ce mois</div><div class="kpi-value" style="font-size:17px;">${fmtNum(caTotal)}</div><div class="kpi-sub">FCFA sur ces clients</div></div>
+      <div class="kpi-tile"><div class="kpi-label">Objectif atteint (moy.)</div><div class="kpi-value">${pctMoy}%</div></div>
+      <div class="kpi-tile"><div class="kpi-label">Objectifs atteints</div><div class="kpi-value">${atteints}<span style="font-size:12px;color:var(--text-muted);">/${rows.length}</span></div></div>
+    `;
+    const box = content.querySelector('#ff-table');
+    box.innerHTML = rows.length ? `<table><thead><tr><th>Client</th><th>Secteur</th><th>Zone</th>${!isCommercial?'<th>Commercial</th>':''}<th>Objectif</th><th>Réalisé (mois)</th><th>Progression</th><th>Dernière visite</th></tr></thead><tbody>
+      ${rows.map(r=>{ const c=r.c; const commercial = APP.profils.get(c.commercialId);
+        return `<tr data-client="${c.id}" style="cursor:pointer;">
+          <td><b>${escapeHtml(c.nom)}</b> ${icon('fridge')}</td>
+          <td>${c.secteur?escapeHtml(c.secteur):'—'}</td>
+          <td>${c.zone?escapeHtml(c.zone):'—'}</td>
+          ${!isCommercial?`<td>${commercial?escapeHtml(commercial.nom):'—'}</td>`:''}
+          <td class="num">${fmtNum(r.objectif)}</td>
+          <td class="num">${fmtNum(r.realise)}</td>
+          <td><div style="display:flex;align-items:center;gap:8px;"><div class="progress" style="width:80px;"><div style="width:${r.pct}%;background:${r.pct>=100?'var(--good)':'var(--accent)'}"></div></div><span class="num" style="font-size:11.5px;">${r.pct}%</span></div></td>
+          <td>${lastVisitDate(c.id)?fmtDateFR(lastVisitDate(c.id)):'jamais'}</td>
+        </tr>`;
+      }).join('')}
+    </tbody></table>` : `<div class="empty-state">Aucun client équipé d'un frigo pour ce filtre.</div>`;
+    box.querySelectorAll('[data-client]').forEach(row=>row.addEventListener('click', ()=>openClientModal(row.getAttribute('data-client'), user)));
+  }
+  const secSel = content.querySelector('#ff-secteur'); if(secSel) secSel.addEventListener('change', apply);
+  const comSel = content.querySelector('#ff-commercial'); if(comSel) comSel.addEventListener('change', apply);
   apply();
 }
 

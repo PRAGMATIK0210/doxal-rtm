@@ -627,7 +627,7 @@ function handleQrScan(clientId, user){
     return;
   }
   if(user.role==='commercial'){
-    if(c.commercialId !== user.id){
+    if(!clientHasCommercial(c, user.id)){
       toast("Ce client ne fait pas partie de votre portefeuille.", 'warning');
       setRoute(defaultRoute(user));
       return;
@@ -637,7 +637,7 @@ function handleQrScan(clientId, user){
     return;
   }
   if(user.role==='superviseur'){
-    APP.qrPreselect = { clientId: c.id, commercialId: c.commercialId || null };
+    APP.qrPreselect = { clientId: c.id, commercialId: c.commercialId || null, commercialIds: clientCommerciaux(c) };
     setRoute('#/fiche');
     return;
   }
@@ -815,11 +815,28 @@ function saveSession(id){ /* Session volontairement non mémorisée : connexion 
 function clearSession(){ try{ localStorage.removeItem('rtm_profile_id'); }catch(e){} APP.currentUser = null; }
 
 /* ============================== DERIVED DATA ============================== */
+// Un client peut désormais être rattaché à PLUSIEURS commerciaux à la fois (ex : portefeuille
+// partagé entre deux commerciaux sur une même zone). Le tableau `commercialIds` est la nouvelle
+// source de vérité ; `commercialId` reste renseigné en parallèle (premier élément du tableau) pour
+// la compatibilité avec les clients déjà en base et les écrans qui n'ont besoin que d'« un » seul
+// commercial de référence (fiche superviseur en mode seul, présélection QR, exports, etc.).
+function clientCommerciaux(c){
+  if(!c) return [];
+  if(Array.isArray(c.commercialIds) && c.commercialIds.length) return c.commercialIds;
+  return c.commercialId ? [c.commercialId] : [];
+}
+function clientHasCommercial(c, commercialId){
+  return !!commercialId && clientCommerciaux(c).includes(commercialId);
+}
+function clientCommerciauxNoms(c){
+  const noms = clientCommerciaux(c).map(id=>{ const p = APP.profils.get(id); return p?p.nom:null; }).filter(Boolean);
+  return noms.length ? noms.join(', ') : null;
+}
 function myClients(commercialId){
-  return [...APP.clients.values()].filter(c=>c.commercialId===commercialId && c.statut==='actif');
+  return [...APP.clients.values()].filter(c=>clientHasCommercial(c, commercialId) && c.statut==='actif');
 }
 function myProspects(commercialId){
-  return [...APP.clients.values()].filter(c=>c.commercialId===commercialId && c.statut==='prospect');
+  return [...APP.clients.values()].filter(c=>clientHasCommercial(c, commercialId) && c.statut==='prospect');
 }
 function responsibleCommercialForZone(zone){
   const secteur = secteurForZone(zone);
@@ -827,7 +844,7 @@ function responsibleCommercialForZone(zone){
   return [...APP.profils.values()].find(p=>p.role==='commercial' && p.secteur===secteur) || null;
 }
 function myProspectsHistory(commercialId){
-  return [...APP.clients.values()].filter(c=>c.commercialId===commercialId && (c.statut==='prospect' || c.statut==='a_valider' || c.origineProspection))
+  return [...APP.clients.values()].filter(c=>clientHasCommercial(c, commercialId) && (c.statut==='prospect' || c.statut==='a_valider' || c.origineProspection))
     .sort((a,b)=> (a.dateCreation||'') < (b.dateCreation||'') ? 1 : -1);
 }
 function fichesForSuperviseur(superviseurId){
@@ -1257,7 +1274,7 @@ function renderTournee(content, user){
     openQrScanner({
       title: 'Scanner le QR code du client',
       hint: 'Visez le QR code collé chez le client pour ouvrir directement sa fiche.',
-      validate: (c)=> c.commercialId===user.id ? true : "Ce client ne fait pas partie de votre portefeuille.",
+      validate: (c)=> clientHasCommercial(c, user.id) ? true : "Ce client ne fait pas partie de votre portefeuille.",
       onResult: (clientId)=> openClientModal(clientId, user),
     });
   });
@@ -1477,11 +1494,12 @@ function openClientModal(clientId, user, autoShowQr){
   const hist = visitesForClient(clientId).slice(0,6);
   const histFiches = fichesForClient(clientId).slice(0,6);
   const existingToday = visiteToday(clientId, user.id);
-  const commercial = APP.profils.get(c.commercialId);
+  const commerciauxNoms = clientCommerciauxNoms(c);
 
-  const canEditInfo = user.role==='commercial' && c.commercialId===user.id;
-  const canRecordVisit = user.role==='commercial' && c.commercialId===user.id;
+  const canEditInfo = user.role==='commercial' && clientHasCommercial(c, user.id);
+  const canRecordVisit = user.role==='commercial' && clientHasCommercial(c, user.id);
   const readOnlyViewer = user.role==='direction' || user.role==='adv';
+  const canManageCommerciaux = user.role==='superviseur' || user.role==='adv' || user.role==='direction';
   let statutPillHtml = '';
   if(c.statut==='prospect') statutPillHtml = '<span class="status-pill warning">Prospect</span>';
   else if(c.statut==='a_valider') statutPillHtml = '<span class="status-pill muted">En attente ADV</span>';
@@ -1525,7 +1543,17 @@ function openClientModal(clientId, user, autoShowQr){
         ${readOnlyViewer ? '' : `<button class="btn sm" id="toggle-frigo">${c.aFrigo?'Retirer le frigo':'Marquer équipé d\'un frigo'}</button>`}
       </div>
       <span class="frigo-badge" style="${c.aFrigo?'':'opacity:.4'}">${icon('fridge')} ${c.aFrigo?'Client équipé':'Pas de frigo'}</span>
-      ${commercial?`<span class="helptext" style="display:block;margin-top:6px;">Commercial en charge : ${escapeHtml(commercial.nom)}</span>`:''}
+      ${commerciauxNoms?`<span class="helptext" style="display:block;margin-top:6px;">Commercial en charge : ${escapeHtml(commerciauxNoms)}</span>`:''}
+    </div>
+
+    <div class="card" style="padding:12px 14px;">
+      <div class="card-head" style="margin-bottom:8px;">
+        <div class="card-title">Commerciaux en charge</div>
+        ${canManageCommerciaux ? `<button class="btn ghost sm" id="edit-commerciaux">Modifier</button>` : ''}
+      </div>
+      <div class="helptext">${commerciauxNoms ? escapeHtml(commerciauxNoms) : 'Aucun commercial assigné.'}${clientCommerciaux(c).length>1?' <span class="status-pill muted" style="margin-left:6px;">Client partagé</span>':''}</div>
+      <div class="helptext" style="margin-top:4px;">Un même client peut être rattaché à plusieurs commerciaux : chacun le retrouve dans son portefeuille, avec un seul QR code et une seule fiche client.</div>
+      <div id="commerciaux-edit-box"></div>
     </div>
 
     <div class="card" style="padding:12px 14px;">
@@ -1631,6 +1659,31 @@ function openClientModal(clientId, user, autoShowQr){
       };
       try{ await APP.db.doc(`clients_rtm/${clientId}`).update(payload); toast('Informations client mises à jour.', 'good'); backdrop.remove(); }
       catch(e){ toast('Échec de la mise à jour.', 'critical'); }
+    });
+  });
+  const editCommerciauxBtn = backdrop.querySelector('#edit-commerciaux');
+  if(editCommerciauxBtn) editCommerciauxBtn.addEventListener('click', ()=>{
+    const box = backdrop.querySelector('#commerciaux-edit-box');
+    const current = new Set(clientCommerciaux(c));
+    const commerciaux = [...APP.profils.values()].filter(p=>p.role==='commercial').sort((a,b)=> a.nom<b.nom?-1:1);
+    box.innerHTML = `<div class="divider"></div>
+      <div class="helptext" style="margin-bottom:8px;">Cochez les commerciaux rattachés à ce client. Un client partagé apparaît dans le portefeuille de chacun des commerciaux cochés.</div>
+      <div class="checklist-grid" id="com-checklist"></div>
+      <button class="btn primary sm" id="com-save" style="margin-top:10px;">Enregistrer</button>`;
+    const cl = box.querySelector('#com-checklist');
+    commerciaux.forEach(p=>{
+      const it = document.createElement('div'); it.className='checklist-item'+(current.has(p.id)?' on':'');
+      it.textContent = p.nom;
+      it.addEventListener('click', ()=>{ if(current.has(p.id)){current.delete(p.id);it.classList.remove('on');} else {current.add(p.id);it.classList.add('on');} });
+      cl.appendChild(it);
+    });
+    box.querySelector('#com-save').addEventListener('click', async ()=>{
+      if(!APP.db) return;
+      const ids = [...current];
+      try{
+        await APP.db.doc(`clients_rtm/${clientId}`).update({ commercialIds: ids, commercialId: ids[0]||null });
+        toast('Commerciaux en charge mis à jour.', 'good'); backdrop.remove();
+      }catch(e){ toast('Échec de la mise à jour.', 'critical'); }
     });
   });
   const toggleFrigoBtn = backdrop.querySelector('#toggle-frigo');
@@ -1803,7 +1856,7 @@ function drawZoneMap(container, clients, user){
   clients.forEach(c=>{
     const [x,y] = projectGeo(c.lng, c.lat, bounds, W, H, PAD);
     const isProspect = c.statut==='prospect';
-    const v = visiteToday(c.id, c.commercialId);
+    const v = clientCommerciaux(c).map(id=>visiteToday(c.id, id)).find(Boolean) || null;
     const isAValider = c.statut==='a_valider';
     const color = v ? (v.statut==='vendu'?'var(--good)':'var(--critical)') : clientPrimaryZoneColor(c.secteur);
     const dot = svgEl('circle', {cx:x,cy:y,r: c.aFrigo?7:5.5, fill: (isProspect||isAValider)?'none':color,
@@ -1919,7 +1972,7 @@ function renderFiche(content, user){
 function renderModeAvecCommercial(box, content, user, equipe, preselect){
   // Si le client scanné est pris en charge par un commercial de cette équipe, on le présélectionne
   // directement — sinon le superviseur choisit normalement, rien ne change pour lui.
-  let commercialId = (preselect && preselect.commercialId && equipe.includes(preselect.commercialId)) ? preselect.commercialId : '';
+  let commercialId = (preselect && preselect.commercialIds && preselect.commercialIds.find(id=>equipe.includes(id))) || '';
   box.innerHTML = `
     <label class="field">Commercial accompagné<select id="fa-commercial"><option value="">Choisir…</option>${equipe.map(id=>{const p=APP.profils.get(id);return p?`<option value="${id}" ${id===commercialId?'selected':''}>${escapeHtml(p.nom)}</option>`:'';}).join('')}</select></label>
     <div id="fa-body" style="margin-top:12px;"></div>
@@ -1959,7 +2012,7 @@ function renderAvecClient(box, content, user, commercialId, preselect){
   let selected = null;
   if(preselect && preselect.clientId){
     const c = APP.clients.get(preselect.clientId);
-    if(c && c.commercialId===commercialId) selected = c;
+    if(c && clientHasCommercial(c, commercialId)) selected = c;
   }
   box.innerHTML = `<div id="fa-client-box"></div><div id="fa-rest" style="display:none;"></div>`;
   renderClientBox();
@@ -1986,7 +2039,7 @@ function renderAvecClient(box, content, user, commercialId, preselect){
         openQrScanner({
           title: 'Scanner le QR code du client',
           hint: `Client accompagné : ${(APP.profils.get(commercialId)||{}).nom||''}`,
-          validate: (c)=> c.commercialId===commercialId ? true : 'Ce client ne fait pas partie du portefeuille de ce commercial.',
+          validate: (c)=> clientHasCommercial(c, commercialId) ? true : 'Ce client ne fait pas partie du portefeuille de ce commercial.',
           onResult: (clientId, client)=>{ selected = client; renderClientBox(); renderRest(); },
         });
       });
@@ -2070,7 +2123,7 @@ function renderAvecProspect(box, content, user, commercialId){
     const contact = box.querySelector('#fap-contact').value.trim();
     const clientPayload = {
       nom, secteur, zone, adresse: box.querySelector('#fap-adresse').value.trim(), telephone: contact,
-      aFrigo: box.querySelector('#fap-frigo').checked, commercialId,
+      aFrigo: box.querySelector('#fap-frigo').checked, commercialId, commercialIds: commercialId ? [commercialId] : [],
       nombreVisites:0, joursVisite: [], objectifMensuel: 150000, statut:'prospect', dateCreation: todayISO(), creePar: user.id,
       origineProspection:'superviseur', superviseurId: user.id,
       lat: gps.value ? gps.value.lat : fallback[0], lng: gps.value ? gps.value.lng : fallback[1],
@@ -2124,9 +2177,9 @@ function renderSansClient(box, content, user, preselect){
   function renderClientBox(){
     const cb = box.querySelector('#fs-client-box');
     if(selected){
-      const commercial = APP.profils.get(selected.commercialId);
+      const commercialNoms = clientCommerciauxNoms(selected);
       cb.innerHTML = `<div class="banner" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-        <span>${icon('camera')} Client : <b>${escapeHtml(selected.nom)}</b> — ${escapeHtml(selected.zone||selected.secteur||'')}${commercial?' · commercial en charge : '+escapeHtml(commercial.nom):''}</span>
+        <span>${icon('camera')} Client : <b>${escapeHtml(selected.nom)}</b> — ${escapeHtml(selected.zone||selected.secteur||'')}${commercialNoms?' · commercial en charge : '+escapeHtml(commercialNoms):''}</span>
         <button class="btn ghost sm" id="fs-rescan" type="button">Changer</button>
       </div>`;
       cb.querySelector('#fs-rescan').addEventListener('click', ()=>{
@@ -2153,11 +2206,11 @@ function renderSansClient(box, content, user, preselect){
     const rest = box.querySelector('#fs-rest');
     rest.style.display = 'block';
     const c = selected;
-    const commercial = APP.profils.get(c.commercialId);
-    const v = visiteToday(c.id, c.commercialId);
+    const commercialNoms = clientCommerciauxNoms(c);
+    const v = clientCommerciaux(c).map(id=>visiteToday(c.id, id)).find(Boolean) || null;
     rest.innerHTML = `
       <div id="fs-info" class="gps-box" style="margin-top:12px;">
-        Commercial en charge : <b>${commercial?escapeHtml(commercial.nom):'non assigné'}</b><br>
+        Commercial en charge : <b>${commercialNoms?escapeHtml(commercialNoms):'non assigné'}</b><br>
         ${v ? `<span class="status-pill good">✓ Le commercial est passé aujourd'hui</span> à ${fmtDateTimeFR(v.timestamp).split(' ')[1]||''}`
             : `<span class="status-pill warning">Pas de passage du commercial enregistré aujourd'hui</span>`}
         <br><span class="helptext">Dernier passage : ${lastVisitDate(c.id)?fmtDateFR(lastVisitDate(c.id)):'jamais'}</span>
@@ -2182,7 +2235,7 @@ function renderSansClient(box, content, user, preselect){
     rest.querySelector('#fs-submit').addEventListener('click', async ()=>{
       if(!APP.db) return;
       const btn = rest.querySelector('#fs-submit'); btn.disabled=true; btn.textContent='Enregistrement…';
-      const vNow = visiteToday(c.id, c.commercialId);
+      const vNow = clientCommerciaux(c).map(id=>visiteToday(c.id, id)).find(Boolean) || null;
       const payload = {
         superviseurId: user.id, commercialId: c.commercialId || null, clientId: c.id, date: todayISO(), timestamp: new Date().toISOString(), modeVisite:'seul',
         produitsPresents: [...chosenProduits], commercialVerifie: !!vNow,
@@ -2237,7 +2290,7 @@ function renderSansProspect(box, content, user){
     const contact = box.querySelector('#fp-contact').value.trim();
     const clientPayload = {
       nom, secteur, zone, adresse: box.querySelector('#fp-adresse').value.trim(), telephone: contact,
-      aFrigo: box.querySelector('#fp-frigo').checked, commercialId: responsable ? responsable.id : null,
+      aFrigo: box.querySelector('#fp-frigo').checked, commercialId: responsable ? responsable.id : null, commercialIds: responsable ? [responsable.id] : [],
       nombreVisites:0, joursVisite: [], objectifMensuel: 150000, statut:'prospect', dateCreation: todayISO(), creePar: user.id,
       origineProspection:'superviseur', superviseurId: user.id,
       lat: gps.value ? gps.value.lat : fallback[0], lng: gps.value ? gps.value.lng : fallback[1],
@@ -2738,7 +2791,7 @@ function renderDashboardBody(box, f){
   let baseClients = f.commercialId ? myClients(f.commercialId) : [...APP.clients.values()].filter(c=>c.statut==='actif');
   if(f.secteur) baseClients = baseClients.filter(c=>c.secteur===f.secteur);
   const plannedToday = baseClients.filter(c=>(c.joursVisite||[]).includes(todayWeekdayFR()));
-  const visitedToday = plannedToday.filter(c=>visiteToday(c.id,c.commercialId));
+  const visitedToday = plannedToday.filter(c=> f.commercialId ? visiteToday(c.id, f.commercialId) : clientCommerciaux(c).some(id=>visiteToday(c.id, id)));
   const tauxVisite = plannedToday.length ? Math.round(visitedToday.length/plannedToday.length*100) : 0;
   const nouveaux = baseClients.filter(c=>c.dateCreation >= f.sinceISO && (!f.toISO || c.dateCreation <= f.toISO)).length;
   const withFrigo = baseClients.length ? Math.round(baseClients.filter(c=>c.aFrigo).length/baseClients.length*100) : 0;
@@ -2897,7 +2950,7 @@ async function exportExcel(){
     const wb = XLSX.utils.book_new();
     const clientsRows = [...APP.clients.values()].map(c=>({
       Code:c.code||'', Nom:c.nom, Secteur:c.secteur||'', Zone:c.zone||'', Adresse:c.adresse||'', Telephone:c.telephone||'', Frigo:c.aFrigo?'Oui':'Non',
-      Commercial: (APP.profils.get(c.commercialId)||{}).nom||'', ObjectifMensuel:c.objectifMensuel||'',
+      Commercial: clientCommerciauxNoms(c)||'', ObjectifMensuel:c.objectifMensuel||'',
       NombreVisites:c.nombreVisites||'', JoursVisite:(c.joursVisite||[]).join(', '), Statut:c.statut,
       Verifie: c.statut==='actif' ? (isClientVerified(c)?'Oui':'Non') : '—',
       Origine: c.origineProspection==='superviseur'?'Prospection superviseur':'Terrain',
@@ -2920,13 +2973,13 @@ async function exportExcel(){
     }));
     const ym = todayDate().getFullYear()+'-'+pad2(todayDate().getMonth()+1);
     const objRows = [...APP.clients.values()].map(c=>({
-      Client:c.nom, Zone:c.zone, Commercial:(APP.profils.get(c.commercialId)||{}).nom||'',
+      Client:c.nom, Zone:c.zone, Commercial:clientCommerciauxNoms(c)||'',
       ObjectifMensuel:suggestObjective(c.id), RealiseMoisEnCours: realizedForClientMonth(c.id, ym),
     }));
     const prospectsRows = [...APP.clients.values()].filter(c=>c.statut==='prospect' || c.origineProspection).map(c=>{
       const visites = visitesForClient(c.id); const vendues = visites.filter(v=>v.statut==='vendu');
       return {
-        Nom:c.nom, Zone:c.zone, Commercial:(APP.profils.get(c.commercialId)||{}).nom||'',
+        Nom:c.nom, Zone:c.zone, Commercial:clientCommerciauxNoms(c)||'',
         Origine: c.origineProspection==='superviseur' ? 'Transmis par '+((APP.profils.get(c.superviseurId)||{}).nom||'superviseur') : 'Terrain',
         DateCreation:c.dateCreation||'', Statut:c.statut, NbVisites:visites.length,
         DerniereVisite: visites.length?visites[0].date:'', CAGenere: vendues.reduce((s,v)=>s+v.montantTotal,0),
@@ -2960,7 +3013,7 @@ async function exportExcel(){
 
 /* ============================== DIRECTION / PROSPECTION — NOUVELLES FONCTIONS ============================== */
 function myAValider(commercialId){
-  return [...APP.clients.values()].filter(c=>c.commercialId===commercialId && c.statut==='a_valider');
+  return [...APP.clients.values()].filter(c=>clientHasCommercial(c, commercialId) && c.statut==='a_valider');
 }
 
 function secteurForZone(zone){
@@ -3077,7 +3130,7 @@ function renderTourneeProspecter(body, user){
       telephone: body.querySelector('#tp-tel').value.trim(),
       aFrigo: body.querySelector('#tp-frigo').checked,
       joursVisite: [], nombreVisites: null, objectifMensuel: 150000,
-      commercialId: user.id, statut:'prospect', origineProspection:'terrain',
+      commercialId: user.id, commercialIds: [user.id], statut:'prospect', origineProspection:'terrain',
       notesProspection: body.querySelector('#tp-notes').value.trim(),
       dateCreation: todayISO(), creePar: user.id,
       lat: gps.value ? gps.value.lat : fallback[0], lng: gps.value ? gps.value.lng : fallback[1],
@@ -3093,7 +3146,7 @@ function renderTourneeProspecter(body, user){
 function renderClientsDB(content, user){
   const isCommercial = user.role==='commercial';
   const canScanLookup = user.role==='adv' || user.role==='direction';
-  let list = isCommercial ? [...APP.clients.values()].filter(c=>c.commercialId===user.id) : [...APP.clients.values()];
+  let list = isCommercial ? [...APP.clients.values()].filter(c=>clientHasCommercial(c, user.id)) : [...APP.clients.values()];
   content.innerHTML = `
     ${demoBannerHTML()}
     <div class="page-head"><div><h1>Base de données clients</h1><p class="page-sub">${list.length} point${list.length>1?'s':''} de vente${isCommercial?' dans votre portefeuille':''}</p></div>
@@ -3127,11 +3180,11 @@ function renderClientsDB(content, user){
     const com = content.querySelector('#filter-commercial') ? content.querySelector('#filter-commercial').value : '';
     const sec = content.querySelector('#filter-secteur').value;
     const st = content.querySelector('#filter-statut').value;
-    const filtered = list.filter(c=> (!com||c.commercialId===com) && (!sec||c.secteur===sec) && (!st||c.statut===st));
+    const filtered = list.filter(c=> (!com||clientHasCommercial(c, com)) && (!sec||c.secteur===sec) && (!st||c.statut===st));
     currentFiltered = filtered;
     const tb = content.querySelector('#clients-tbody');
     tb.innerHTML = filtered.map(c=>{
-      const commercial = APP.profils.get(c.commercialId);
+      const commercialNoms = clientCommerciauxNoms(c);
       let statutPill;
       if(c.statut==='prospect') statutPill = '<span class="status-pill warning">Prospect</span>';
       else if(c.statut==='a_valider') statutPill = '<span class="status-pill muted">En attente ADV</span>';
@@ -3143,7 +3196,7 @@ function renderClientsDB(content, user){
         <td>${c.zone?escapeHtml(c.zone):'—'}</td>
         <td>${c.telephone?escapeHtml(c.telephone):'—'}</td>
         <td>${(c.joursVisite&&c.joursVisite.length)?c.joursVisite.join(', '):'—'}</td>
-        <td>${commercial?escapeHtml(commercial.nom):'—'}</td>
+        <td>${commercialNoms?escapeHtml(commercialNoms):'—'}</td>
         <td>${statutPill}</td>
         <td><button class="btn ghost sm" data-qr="${c.id}" title="Voir / imprimer le QR code">${icon('camera')}</button></td></tr>`;
     }).join('') || `<tr><td colspan="9" class="empty-state">Aucun client pour ce filtre.</td></tr>`;
@@ -3236,7 +3289,7 @@ function renderClientsFrigo(content, user){
   // voit son propre portefeuille, les autres rôles (superviseur, ADV, direction) voient l'ensemble
   // des clients frigo de l'organisation, comme pour la Base de données clients et la Carte clients.
   const isCommercial = user.role==='commercial';
-  const list = (isCommercial ? [...APP.clients.values()].filter(c=>c.commercialId===user.id) : [...APP.clients.values()])
+  const list = (isCommercial ? [...APP.clients.values()].filter(c=>clientHasCommercial(c, user.id)) : [...APP.clients.values()])
     .filter(c=>c.aFrigo && c.statut==='actif');
   const ym = todayDate().getFullYear()+'-'+pad2(todayDate().getMonth()+1);
   content.innerHTML = `
@@ -3255,7 +3308,7 @@ function renderClientsFrigo(content, user){
   function apply(){
     const com = content.querySelector('#ff-commercial') ? content.querySelector('#ff-commercial').value : '';
     const sec = content.querySelector('#ff-secteur').value;
-    const filtered = list.filter(c=> (!com||c.commercialId===com) && (!sec||c.secteur===sec));
+    const filtered = list.filter(c=> (!com||clientHasCommercial(c, com)) && (!sec||c.secteur===sec));
     const rows = filtered.map(c=>{
       const objectif = suggestObjective(c.id);
       const realise = realizedForClientMonth(c.id, ym);
@@ -3273,12 +3326,12 @@ function renderClientsFrigo(content, user){
     `;
     const box = content.querySelector('#ff-table');
     box.innerHTML = rows.length ? `<table><thead><tr><th>Client</th><th>Secteur</th><th>Zone</th>${!isCommercial?'<th>Commercial</th>':''}<th>Objectif</th><th>Réalisé (mois)</th><th>Progression</th><th>Dernière visite</th></tr></thead><tbody>
-      ${rows.map(r=>{ const c=r.c; const commercial = APP.profils.get(c.commercialId);
+      ${rows.map(r=>{ const c=r.c; const commercialNoms = clientCommerciauxNoms(c);
         return `<tr data-client="${c.id}" style="cursor:pointer;">
           <td><b>${escapeHtml(c.nom)}</b> ${icon('fridge')}</td>
           <td>${c.secteur?escapeHtml(c.secteur):'—'}</td>
           <td>${c.zone?escapeHtml(c.zone):'—'}</td>
-          ${!isCommercial?`<td>${commercial?escapeHtml(commercial.nom):'—'}</td>`:''}
+          ${!isCommercial?`<td>${commercialNoms?escapeHtml(commercialNoms):'—'}</td>`:''}
           <td class="num">${fmtNum(r.objectif)}</td>
           <td class="num">${fmtNum(r.realise)}</td>
           <td><div style="display:flex;align-items:center;gap:8px;"><div class="progress" style="width:80px;"><div style="width:${r.pct}%;background:${r.pct>=100?'var(--good)':'var(--accent)'}"></div></div><span class="num" style="font-size:11.5px;">${r.pct}%</span></div></td>
@@ -3308,7 +3361,7 @@ function renderComptesAValider(content, user){
     const box = content.querySelector('#comptes-list');
     if(!list.length){ box.innerHTML = `<div class="empty-state">Aucun compte en attente de création pour l'instant.</div>`; return; }
     box.innerHTML = list.map(c=>{
-      const commercial = APP.profils.get(c.commercialId);
+      const commercialNoms = clientCommerciauxNoms(c);
       const vente = firstSaleFor(c.id);
       return `<div class="card" style="padding:14px;margin-bottom:12px;" data-card="${c.id}">
         <div class="card-head" style="margin-bottom:8px;">
@@ -3317,7 +3370,7 @@ function renderComptesAValider(content, user){
           <span class="status-pill muted">Vente en attente depuis le ${c.venteEnAttenteDate?fmtDateFR(c.venteEnAttenteDate):'—'}</span>
         </div>
         <div class="helptext" style="margin-bottom:10px;">
-          Commercial : <b>${commercial?escapeHtml(commercial.nom):'non assigné'}</b>
+          Commercial : <b>${commercialNoms?escapeHtml(commercialNoms):'non assigné'}</b>
           ${c.origineProspection==='superviseur'?' · prospect transmis par le superviseur':' · prospection terrain'}
           ${vente?` · première vente : ${fmtFCFA(vente.montantTotal)}`:''}
         </div>

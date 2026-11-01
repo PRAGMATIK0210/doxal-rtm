@@ -455,7 +455,7 @@ function qrCodeDataURL(text, size){
   });
 }
 // Ouvre une petite fenêtre d'impression avec le QR code en grand, prête à coller chez le client.
-function printQrImage(dataUrl, nom, code){
+function printQrImage(dataUrl, nom, initiales){
   const w = window.open('', '_blank', 'width=420,height=560');
   if(!w){ toast("Impossible d'ouvrir la fenêtre d'impression (bloquée par le navigateur).", 'warning'); return; }
   w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>QR code — ${escapeHtml(nom||'')}</title>
@@ -463,7 +463,7 @@ function printQrImage(dataUrl, nom, code){
     </head><body>
     <img src="${dataUrl}" alt="QR code">
     <h2>${escapeHtml(nom||'')}</h2>
-    <p>${code?escapeHtml(code):''}</p>
+    <p>${initiales?escapeHtml(initiales):''}</p>
     <script>window.onload = function(){ setTimeout(function(){ window.print(); }, 200); };<\/script>
     </body></html>`);
   w.document.close();
@@ -832,6 +832,16 @@ function clientCommerciauxNoms(c){
   const noms = clientCommerciaux(c).map(id=>{ const p = APP.profils.get(id); return p?p.nom:null; }).filter(Boolean);
   return noms.length ? noms.join(', ') : null;
 }
+// Initiales d'un nom complet (ex. « ALIOUNE FALL » -> « AF »), affichées sous les QR codes
+// imprimés pour identifier en un coup d'œil le ou les commerciaux en charge du client sans avoir
+// à lire un nom complet sur une petite étiquette collée en boutique.
+function initialesNomCommercial(nom){
+  return (nom||'').trim().split(/\s+/).map(w=>w[0]).filter(Boolean).join('').toUpperCase();
+}
+function clientCommerciauxInitiales(c){
+  const inits = clientCommerciaux(c).map(id=>{ const p = APP.profils.get(id); return p?initialesNomCommercial(p.nom):null; }).filter(Boolean);
+  return inits.length ? inits.join('/') : null;
+}
 function myClients(commercialId){
   return [...APP.clients.values()].filter(c=>clientHasCommercial(c, commercialId) && c.statut==='actif');
 }
@@ -1073,6 +1083,7 @@ const ICONS = {
   fridge: '<rect x="6" y="3" width="12" height="18" rx="2"/><path d="M6 10h12M9 6v1.5M9 13v1.5"/>',
   pin: '<path d="M12 21s7-6.5 7-12a7 7 0 1 0-14 0c0 5.5 7 12 7 12Z"/><circle cx="12" cy="9" r="2.3"/>',
   logout: '<path d="M9 5H5v14h4M15 12H3M13 8l4 4-4 4"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-2.7-6.4"/><path d="M21 3v6h-6"/>',
   download: '<path d="M12 3v13m0 0 4-4m-4 4-4-4"/><path d="M4 19h16"/>',
   check: '<path d="M4 12l5 5L20 6"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
@@ -1158,7 +1169,10 @@ function renderShellHTML(user){
         <div class="nav-section-label">Navigation</div>
         ${items.map(it=>`<div class="nav-item ${APP.route===it.r?'active':''}" data-nav="${it.r}">${icon(it.i)}<span>${it.l}</span></div>`).join('')}
       </div>
-      <div class="sidebar-foot">DOXAL · RTM Intelligence<br>Données partagées, synchronisées en temps réel.</div>
+      <div class="sidebar-foot">
+        <button class="btn ghost sm" id="app-update-btn" style="width:100%;justify-content:center;margin-bottom:10px;">${icon('refresh')} Mettre à jour l'application</button>
+        DOXAL · RTM Intelligence<br>Données partagées, synchronisées en temps réel.
+      </div>
     </aside>
     <div class="main-col">
       <div class="topbar">
@@ -1188,6 +1202,25 @@ function wireShell(user){
   document.querySelectorAll('[data-nav]').forEach(n=>n.addEventListener('click', ()=>{ closeSidebar(); setRoute(n.getAttribute('data-nav')); }));
   const sw = document.getElementById('profile-switch');
   if(sw) sw.addEventListener('click', ()=>{ clearSession(); setRoute('#/login'); });
+  const updateBtn = document.getElementById('app-update-btn');
+  if(updateBtn) updateBtn.addEventListener('click', forceAppUpdate);
+}
+// Recharge l'application en forçant la récupération de la toute dernière version publiée :
+// vide le cache du navigateur si disponible, puis navigue vers une URL jamais vue auparavant
+// (paramètre horodaté) pour que le document index.html soit re-téléchargé au lieu d'être servi
+// depuis le cache local — utile quand une mise à jour vient d'être publiée et que l'utilisateur
+// doit la récupérer sans avoir à réinstaller l'application sur son téléphone.
+async function forceAppUpdate(){
+  toast('Mise à jour en cours…', 'good');
+  try{
+    if('caches' in window){
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k=>caches.delete(k)));
+    }
+  }catch(e){}
+  setTimeout(()=>{
+    location.href = location.pathname + '?_u=' + Date.now() + (location.hash||'');
+  }, 250);
 }
 
 function renderRoute(content, user, route){
@@ -1618,12 +1651,12 @@ function openClientModal(clientId, user, autoShowQr){
         <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;">
           <img src="${dataUrl}" alt="QR code ${escapeHtml(c.nom)}" style="width:150px;height:150px;border:1px solid var(--border);border-radius:8px;background:#fff;padding:6px;">
           <div style="display:flex;flex-direction:column;gap:8px;">
-            <span class="helptext" style="max-width:260px;">Client : <b>${escapeHtml(c.nom)}</b>${c.code?' · Code : '+escapeHtml(c.code):''}</span>
+            <span class="helptext" style="max-width:260px;">Client : <b>${escapeHtml(c.nom)}</b>${clientCommerciauxInitiales(c)?' · '+escapeHtml(clientCommerciauxInitiales(c)):''}</span>
             <button class="btn sm" id="qr-print">${icon('pdf')} Imprimer</button>
             <a class="btn ghost sm" id="qr-download" download="QR-${(c.code||c.nom||'client').replace(/[^a-zA-Z0-9-_]+/g,'_')}.png" href="${dataUrl}" style="text-decoration:none;">${icon('download')} Télécharger l'image</a>
           </div>
         </div>`;
-      qrBox.querySelector('#qr-print').addEventListener('click', ()=>printQrImage(dataUrl, c.nom, c.code));
+      qrBox.querySelector('#qr-print').addEventListener('click', ()=>printQrImage(dataUrl, c.nom, clientCommerciauxInitiales(c)));
     }
   });
   if(autoShowQr && toggleQrBtn) toggleQrBtn.click();
@@ -3240,7 +3273,7 @@ async function exportClientsQrPDF(clients, triggerBtn){
       doc.setFont('helvetica','bold'); doc.setFontSize(10);
       doc.text(String(c.nom||'').slice(0,26), x + cellW/2, y + qrSize + 16, {align:'center', maxWidth: cellW-6});
       doc.setFont('helvetica','normal'); doc.setFontSize(8.5);
-      doc.text(c.code ? String(c.code) : (c.zone||''), x + cellW/2, y + qrSize + 30, {align:'center'});
+      doc.text(clientCommerciauxInitiales(c) || '', x + cellW/2, y + qrSize + 30, {align:'center'});
       col++;
       if(col>=cols){ col=0; x = marginX; y += cellH; }
       else { x += cellW; }

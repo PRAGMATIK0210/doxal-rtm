@@ -1155,6 +1155,7 @@ function navFor(user){
     ];
   }
   return [
+    {r:'#/scan', l:'Scanner un client', i:'camera'},
     {r:'#/fiche', l:'Fiche de suivi', i:'clipboard'},
     {r:'#/journal', l:'Journal d\'activité', i:'journal'},
     {r:'#/pricing', l:'Pricing marché', i:'tag'},
@@ -3196,7 +3197,7 @@ function renderTourneeProspecter(body, user){
 
 function renderClientsDB(content, user){
   const isCommercial = user.role==='commercial';
-  const canScanLookup = user.role==='adv' || user.role==='direction';
+  const canScanLookup = user.role==='adv' || user.role==='direction' || user.role==='superviseur';
   let list = isCommercial ? [...APP.clients.values()].filter(c=>clientHasCommercial(c, user.id)) : [...APP.clients.values()];
   content.innerHTML = `
     ${demoBannerHTML()}

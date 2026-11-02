@@ -633,7 +633,7 @@ function handleQrScan(clientId, user){
       return;
     }
     setRoute('#/tournee');
-    setTimeout(()=>openClientModal(clientId, user), 60);
+    setTimeout(()=>openClientModal(clientId, user, false, true), 60);
     return;
   }
   if(user.role==='superviseur'){
@@ -643,7 +643,7 @@ function handleQrScan(clientId, user){
   }
   // Direction / ADV : consultation en lecture seule depuis la base clients.
   setRoute('#/base-clients');
-  setTimeout(()=>openClientModal(clientId, user), 60);
+  setTimeout(()=>openClientModal(clientId, user, false, true), 60);
 }
 const SECTEURS_DATA = {
   'DAKAR 1': {chef:'ALIOUNE FALL', superviseur:'SAID BEN HADJ', zones:['DAKAR PLATEAU','REUBEUSS','MEDINA','FASS','GUEULE TAPEE','COLOBANE','FANN POINT E AMITIE','HLM OUAGOU NIAYES','NIARI TALLY BEN TALLY','DIEUPPEUL DERKLE','GRAND DAKAR','SACRE CŒUR','LIBERTE 6','SCAT URBAM','SUD FOIRE','OUEST FOIRE','GRAND YOFF','ZONE DE CAPTAGE','HLM PATTE D OIE','KHAR YALLA','MERMOZ','OUAKAM','ALMADIES','NGOR']},
@@ -1269,7 +1269,7 @@ function renderScanClient(content, user){
   function launchScan(){
     openQrScanner({
       hint: 'Visez le QR code collé chez le client pour ouvrir sa fiche.',
-      onResult: (clientId)=> openClientModal(clientId, user),
+      onResult: (clientId)=> openClientModal(clientId, user, false, true),
     });
   }
   content.innerHTML = `
@@ -1327,7 +1327,7 @@ function renderTournee(content, user){
       title: 'Scanner le QR code du client',
       hint: 'Visez le QR code collé chez le client pour ouvrir directement sa fiche.',
       validate: (c)=> clientHasCommercial(c, user.id) ? true : "Ce client ne fait pas partie de votre portefeuille.",
-      onResult: (clientId)=> openClientModal(clientId, user),
+      onResult: (clientId)=> openClientModal(clientId, user, false, true),
     });
   });
   const body = content.querySelector('#t-body');
@@ -1534,7 +1534,7 @@ function renderJournalProspects(content, user){
 }
 
 /* ============================== CLIENT DETAIL MODAL ============================== */
-function openClientModal(clientId, user, autoShowQr){
+function openClientModal(clientId, user, autoShowQr, scanMode){
   const c = APP.clients.get(clientId);
   if(!c) return;
   const backdrop = document.createElement('div'); backdrop.className='modal-backdrop';
@@ -1563,16 +1563,16 @@ function openClientModal(clientId, user, autoShowQr){
       <button class="modal-close" data-close>${icon('x')}</button>
     </div>
 
-    <div class="card" style="padding:12px 14px;">
+    ${scanMode ? '' : `<div class="card" style="padding:12px 14px;">
       <div class="card-head" style="margin-bottom:8px;">
         <div class="card-title">QR code du client</div>
         <button class="btn ghost sm" id="toggle-qr">${icon('camera')} Voir / Imprimer le QR code</button>
       </div>
       <div class="helptext">À coller chez le client : une fois scanné avec l'appareil photo du téléphone, il ouvre directement la fiche de ce client dans l'application.</div>
       <div id="qr-box" style="display:none;margin-top:10px;"></div>
-    </div>
+    </div>`}
 
-    <div class="card" style="padding:12px 14px;">
+    ${scanMode ? '' : `<div class="card" style="padding:12px 14px;">
       <div class="card-head" style="margin-bottom:8px;">
         <div class="card-title">Informations client</div>
         ${canEditInfo ? `<button class="btn ghost sm" id="edit-infos">Modifier</button>` : ''}
@@ -1587,18 +1587,18 @@ function openClientModal(clientId, user, autoShowQr){
       </div>
       ${(c.statut==='actif') ? `<div style="margin-top:8px;">${isClientVerified(c) ? '<span class="status-pill good">✓ Fiche client complète</span>' : '<span class="status-pill critical">⚠ Client non vérifié — complétez zone, téléphone, nombre de visites et jours de visite</span>'}</div>` : ''}
       <div id="infos-edit-box"></div>
-    </div>
+    </div>`}
 
     <div class="card" style="padding:12px 14px;">
       <div class="card-head" style="margin-bottom:8px;">
         <div class="card-title">Équipement frigo</div>
-        ${readOnlyViewer ? '' : `<button class="btn sm" id="toggle-frigo">${c.aFrigo?'Retirer le frigo':'Marquer équipé d\'un frigo'}</button>`}
+        ${(readOnlyViewer || scanMode) ? '' : `<button class="btn sm" id="toggle-frigo">${c.aFrigo?'Retirer le frigo':'Marquer équipé d\'un frigo'}</button>`}
       </div>
       <span class="frigo-badge" style="${c.aFrigo?'':'opacity:.4'}">${icon('fridge')} ${c.aFrigo?'Client équipé':'Pas de frigo'}</span>
       ${commerciauxNoms?`<span class="helptext" style="display:block;margin-top:6px;">Commercial en charge : ${escapeHtml(commerciauxNoms)}</span>`:''}
     </div>
 
-    <div class="card" style="padding:12px 14px;">
+    ${scanMode ? '' : `<div class="card" style="padding:12px 14px;">
       <div class="card-head" style="margin-bottom:8px;">
         <div class="card-title">Commerciaux en charge</div>
         ${canManageCommerciaux ? `<button class="btn ghost sm" id="edit-commerciaux">Modifier</button>` : ''}
@@ -1606,9 +1606,9 @@ function openClientModal(clientId, user, autoShowQr){
       <div class="helptext">${commerciauxNoms ? escapeHtml(commerciauxNoms) : 'Aucun commercial assigné.'}${clientCommerciaux(c).length>1?' <span class="status-pill muted" style="margin-left:6px;">Client partagé</span>':''}</div>
       <div class="helptext" style="margin-top:4px;">Un même client peut être rattaché à plusieurs commerciaux : chacun le retrouve dans son portefeuille, avec un seul QR code et une seule fiche client.</div>
       <div id="commerciaux-edit-box"></div>
-    </div>
+    </div>`}
 
-    <div class="card" style="padding:12px 14px;">
+    ${scanMode ? '' : `<div class="card" style="padding:12px 14px;">
       <div class="card-head" style="margin-bottom:6px;">
         <div class="card-title">Objectif du mois (lissé sur l'historique)</div>
       </div>
@@ -1617,7 +1617,7 @@ function openClientModal(clientId, user, autoShowQr){
         <span class="num" style="font-size:12.5px;white-space:nowrap;">${fmtNum(realized)} / ${fmtNum(objectif)} FCFA</span>
       </div>
       <div class="helptext">Objectif calculé automatiquement par lissage exponentiel des achats des 6 derniers mois (+10%) — non modifiable manuellement.</div>
-    </div>
+    </div>`}
 
     <div class="card" style="padding:12px 14px;">
       <div class="card-title" style="margin-bottom:8px;">Historique des passages commercial (ventes)</div>
@@ -3224,7 +3224,7 @@ function renderClientsDB(content, user){
     openQrScanner({
       title: 'Scanner le QR code du client',
       hint: 'Visez le QR code collé chez le client pour ouvrir directement sa fiche (passages commercial et superviseur, ventes, dates et heures).',
-      onResult: (clId)=> openClientModal(clId, user),
+      onResult: (clId)=> openClientModal(clId, user, false, true),
     });
   });
   let currentFiltered = [];

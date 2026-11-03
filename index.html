@@ -1471,7 +1471,7 @@ function clientRowNode(c, user){
     </div>
     ${pill}
   `;
-  row.addEventListener('click', ()=>openClientModal(c.id, user));
+  row.addEventListener('click', ()=>openClientModal(c.id, user, false, true));
   return row;
 }
 
@@ -1639,7 +1639,7 @@ function renderJournalProspects(content, user){
           <td>${derniere}</td><td class="num">${fmtNum(ca)}</td></tr>`;
       }).join('')}
     </tbody></table>`;
-    box.querySelectorAll('tr[data-client]').forEach(row=>row.addEventListener('click', ()=>openClientModal(row.getAttribute('data-client'), user)));
+    box.querySelectorAll('tr[data-client]').forEach(row=>row.addEventListener('click', ()=>openClientModal(row.getAttribute('data-client'), user, false, true)));
   }
   wireDateRange(content, 'pj', apply);
   apply(earliest, todayISO());
@@ -2040,7 +2040,7 @@ function drawZoneMap(container, clients, user){
     if(isAValider) dot.setAttribute('fill', 'var(--accent-soft)');
     dot.addEventListener('mousemove', e=>showTooltip(tooltip, e, `${c.nom} — ${c.zone||c.secteur||''}${c.aFrigo?' · frigo':''}${isProspect?' · prospect':''}${isAValider?' · en attente Direction':''}`));
     dot.addEventListener('mouseleave', ()=>hideTooltip(tooltip));
-    dot.addEventListener('click', ()=>openClientModal(c.id, user));
+    dot.addEventListener('click', ()=>openClientModal(c.id, user, false, true));
     svg.appendChild(dot);
   });
   container.appendChild(svg);
@@ -2558,7 +2558,7 @@ function renderJournalSuperviseur(content, user){
           <td class="helptext" style="max-width:220px;white-space:normal;">${escapeHtml((f.notes||'').slice(0,120))}</td></tr>`;
       }).join('')}
     </tbody></table>`;
-    box.querySelectorAll('tr[data-client]').forEach(row=>row.addEventListener('click', ()=>openClientModal(row.getAttribute('data-client'), user)));
+    box.querySelectorAll('tr[data-client]').forEach(row=>row.addEventListener('click', ()=>openClientModal(row.getAttribute('data-client'), user, false, true)));
   }
   content.querySelector('#j-zone').addEventListener('change', ()=>apply());
   content.querySelector('#j-mode').addEventListener('change', ()=>apply());
@@ -3250,7 +3250,7 @@ function renderTourneeAujourdhui(body, user){
       row.innerHTML = `<div class="client-main"><div class="client-name">${escapeHtml(p.nom)}</div>
         <div class="client-meta">${escapeHtml(p.zone||p.secteur||'')} · ${p.origineProspection==='superviseur'?'signalé par un superviseur':'prospection terrain'}${p.adresse?' · '+escapeHtml(p.adresse):''}</div></div>
         <span class="status-pill warning">À prospecter</span>`;
-      row.addEventListener('click', ()=>openClientModal(p.id, user));
+      row.addEventListener('click', ()=>openClientModal(p.id, user, false, true));
       pl.appendChild(row);
     });
   }
@@ -3261,7 +3261,7 @@ function renderTourneeAujourdhui(body, user){
       row.innerHTML = `<div class="client-main"><div class="client-name">${escapeHtml(p.nom)}</div>
         <div class="client-meta">${escapeHtml(p.zone||p.secteur||'')} · vente enregistrée le ${p.venteEnAttenteDate?fmtDateFR(p.venteEnAttenteDate):'—'}, code client en attente</div></div>
         <span class="status-pill muted">En attente ADV</span>`;
-      row.addEventListener('click', ()=>openClientModal(p.id, user));
+      row.addEventListener('click', ()=>openClientModal(p.id, user, false, true));
       al.appendChild(row);
     });
   }
@@ -3563,7 +3563,7 @@ function renderClientsFrigo(content, user){
         </tr>`;
       }).join('')}
     </tbody></table>` : `<div class="empty-state">Aucun client équipé d'un frigo pour ce filtre.</div>`;
-    box.querySelectorAll('[data-client]').forEach(row=>row.addEventListener('click', ()=>openClientModal(row.getAttribute('data-client'), user)));
+    box.querySelectorAll('[data-client]').forEach(row=>row.addEventListener('click', ()=>openClientModal(row.getAttribute('data-client'), user, false, true)));
   }
   const secSel = content.querySelector('#ff-secteur'); if(secSel) secSel.addEventListener('change', apply);
   const comSel = content.querySelector('#ff-commercial'); if(comSel) comSel.addEventListener('change', apply);
@@ -3676,7 +3676,7 @@ function renderActiviteGenerale(content, user){
         <td>${v.statut==='vendu'?'<span class="status-pill good">Vendu</span>':'<span class="status-pill critical">Non vendu</span>'}</td>
         <td class="num">${v.statut==='vendu'?fmtFCFA(v.montantTotal):'—'}</td><td>${positionBadge(v.gps)}</td></tr>`; }).join('')}
     </tbody></table>` : `<div class="empty-state">Aucun passage pour cette période / ce secteur.</div>`;
-    vBox.querySelectorAll('[data-client]').forEach(row=>row.addEventListener('click', ()=>openClientModal(row.getAttribute('data-client'), user)));
+    vBox.querySelectorAll('[data-client]').forEach(row=>row.addEventListener('click', ()=>openClientModal(row.getAttribute('data-client'), user, false, true)));
 
     const fBox = content.querySelector('#ag-fiches');
     const fRows = fiches.slice(0,60);
@@ -3686,7 +3686,7 @@ function renderActiviteGenerale(content, user){
         <td>${cl?escapeHtml(cl.nom):'—'}</td><td>${modeVisiteLabel(f.modeVisite, true)}</td>
         <td class="helptext" style="max-width:160px;white-space:normal;">${escapeHtml((f.concurrence||'').slice(0,90))||'—'}</td><td>${positionBadge(f.gps)}</td></tr>`; }).join('')}
     </tbody></table>` : `<div class="empty-state">Aucune fiche pour cette période / ce secteur.</div>`;
-    fBox.querySelectorAll('[data-client]').forEach(row=>{ const cid=row.getAttribute('data-client'); if(cid) row.addEventListener('click', ()=>openClientModal(cid, user)); });
+    fBox.querySelectorAll('[data-client]').forEach(row=>{ const cid=row.getAttribute('data-client'); if(cid) row.addEventListener('click', ()=>openClientModal(cid, user, false, true)); });
   }
   content.querySelector('#ag-secteur').addEventListener('change', ()=>apply());
   wireDateRange(content, 'ag', apply);

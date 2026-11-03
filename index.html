@@ -795,6 +795,98 @@ function scheduleRender(){
   requestAnimationFrame(()=>{ renderScheduled = false; render(); });
 }
 
+/* ============================== MODE HORS LIGNE ============================== */
+// Permet d'enregistrer un passage, une vente, une fiche superviseur, un relevé de prix ou un
+// prospect même sans connexion internet sur le terrain. Chaque écriture est d'abord tentée en
+// direct (avec un délai maximum de 8 secondes pour ne pas bloquer l'interface sur un réseau trop
+// lent) ; si elle échoue parce que l'appareil est hors ligne, elle est conservée dans le stockage
+// local du téléphone (elle survit donc à la fermeture de l'application) et renvoyée automatiquement
+// dès que la connexion revient — au retour du réseau, au premier plan de l'application, ou toutes
+// les 20 secondes par sécurité. Les écritures sont rejouées dans leur ordre d'origine. Une erreur
+// qui n'est pas due à l'absence de réseau (ex : donnée refusée par le serveur) n'est jamais mise en
+// file : elle remonte normalement à l'appelant, qui affiche son message d'échec habituel.
+const OFFLINE_QUEUE_KEY = 'rtm_offline_queue_v1';
+const OfflineQueue = {
+  items: [],
+  load(){ try{ this.items = JSON.parse(localStorage.getItem(OFFLINE_QUEUE_KEY) || '[]'); }catch(e){ this.items = []; } },
+  persist(){ try{ localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(this.items)); }catch(e){} },
+  add(item){ this.items.push(item); this.persist(); scheduleRender(); },
+  removeFront(){ this.items.shift(); this.persist(); scheduleRender(); },
+  count(){ return this.items.length; },
+};
+OfflineQueue.load();
+
+function genLocalId(){
+  try{ if(crypto && crypto.randomUUID) return crypto.randomUUID(); }catch(e){}
+  return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+}
+function withTimeout(promise, ms){
+  return new Promise((resolve, reject)=>{
+    const t = setTimeout(()=>reject(new Error('timeout')), ms);
+    promise.then(v=>{ clearTimeout(t); resolve(v); }, e=>{ clearTimeout(t); reject(e); });
+  });
+}
+// Distingue une panne réseau (à mettre en file, on retentera plus tard) d'une vraie erreur
+// applicative ou serveur (à remonter normalement, inutile de la rejouer indéfiniment).
+function looksOffline(e){
+  if(!navigator.onLine) return true;
+  if(e && e.message === 'timeout') return true;
+  if(e instanceof TypeError) return true;
+  if(e && typeof e.message === 'string' && /network|fetch/i.test(e.message)) return true;
+  return false;
+}
+async function sendQueueItem(item){
+  if(item.kind === 'set') await APP.db.doc(`${item.collection}/${item.docId}`).set(item.payload);
+  else await APP.db.doc(`${item.collection}/${item.docId}`).update(item.payload);
+}
+let offlineFlushing = false;
+async function flushOfflineQueue(){
+  if(!APP.db || offlineFlushing) return;
+  offlineFlushing = true;
+  let synced = 0;
+  try{
+    while(OfflineQueue.items.length){
+      try{ await withTimeout(sendQueueItem(OfflineQueue.items[0]), 8000); }
+      catch(e){ break; } // toujours hors ligne : on retentera plus tard, sans perdre l'ordre
+      OfflineQueue.removeFront();
+      synced++;
+    }
+  } finally { offlineFlushing = false; }
+  if(synced) toast(`${synced} enregistrement${synced>1?'s':''} en attente synchronisé${synced>1?'s':''}.`, 'good');
+}
+window.addEventListener('online', flushOfflineQueue);
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) flushOfflineQueue(); });
+setInterval(flushOfflineQueue, 20000);
+
+// Crée un nouveau document : essaie en direct, et si l'appareil est hors ligne, le place en file
+// d'attente et met à jour tout de suite la carte locale correspondante pour que l'application reste
+// utilisable normalement pendant la coupure. L'identifiant est généré ici (plutôt que par le
+// serveur) précisément pour pouvoir continuer à travailler avec ce document avant même qu'il ait pu
+// être envoyé (ex : rattacher une fiche superviseur au prospect qu'on vient de créer hors ligne).
+async function dbCreate(collectionName, payload, map, label){
+  const docId = genLocalId();
+  if(navigator.onLine){
+    try{ await withTimeout(APP.db.doc(`${collectionName}/${docId}`).set(payload), 8000); return {id: docId, queued:false}; }
+    catch(e){ if(!looksOffline(e)) throw e; }
+  }
+  if(map) map.set(docId, Object.assign({id:docId}, payload));
+  scheduleRender();
+  OfflineQueue.add({qid: genLocalId(), kind:'set', collection:collectionName, docId, payload, label, ts: Date.now()});
+  return {id: docId, queued:true};
+}
+// Met à jour un document existant (fusion, comme APP.db.doc().update()) : essaie en direct, et si
+// l'appareil est hors ligne, met en file et applique la même fusion tout de suite à la copie locale.
+async function dbUpdate(collectionName, docId, payload, map, label){
+  if(navigator.onLine){
+    try{ await withTimeout(APP.db.doc(`${collectionName}/${docId}`).update(payload), 8000); return {queued:false}; }
+    catch(e){ if(!looksOffline(e)) throw e; }
+  }
+  if(map && map.has(docId)) Object.assign(map.get(docId), payload);
+  scheduleRender();
+  OfflineQueue.add({qid: genLocalId(), kind:'update', collection:collectionName, docId, payload, label, ts: Date.now()});
+  return {queued:true};
+}
+
 async function boot(){
   // Reprend la route déjà présente dans l'URL au premier chargement (ex : lien d'un QR code
   // scanné "à froid", appli pas encore ouverte) — sans ça, seul un changement de hash ultérieur
@@ -817,9 +909,13 @@ async function boot(){
     subscribeCollection('profils', APP.profils);
     subscribeCollection('produits', APP.produits);
     subscribeCollection('clients_rtm', APP.clients);
-    subscribeCollection('visites', APP.visites, {orderBy:'date', limit:600});
-    subscribeCollection('fichesSuperviseur', APP.fiches, {orderBy:'date', limit:300});
-    subscribeCollection('relevesPrix', APP.relevesPrix, {orderBy:'date', limit:300});
+    // Plus aucune limite sur ces trois collections : tout l'historique est chargé en mémoire
+    // (comme les clients) plutôt que seulement les 600/300/300 lignes les plus récentes, pour ne
+    // rien perdre à mesure que l'activité s'accumule sur le terrain.
+    subscribeCollection('visites', APP.visites, {orderBy:'date'});
+    subscribeCollection('fichesSuperviseur', APP.fiches, {orderBy:'date'});
+    subscribeCollection('relevesPrix', APP.relevesPrix, {orderBy:'date'});
+    flushOfflineQueue(); // rejoue tout de suite ce qui est resté en attente d'une session précédente
   }
   // Par sécurité, aucune session n'est conservée d'une ouverture à l'autre : à chaque lancement de
   // l'application (icône sur l'écran d'accueil ou nouvel onglet), l'identifiant et le mot de passe
@@ -1191,6 +1287,7 @@ function renderShellHTML(user){
       </div>
       <div class="sidebar-foot">
         <button class="btn ghost sm" id="app-update-btn" style="width:100%;justify-content:center;margin-bottom:10px;">${icon('refresh')} Mettre à jour l'application</button>
+        ${OfflineQueue.count() ? `<div class="status-pill warning" id="offline-queue-badge" style="width:100%;justify-content:center;margin-bottom:10px;cursor:pointer;" title="Cliquer pour forcer l'envoi">${icon('refresh')} ${OfflineQueue.count()} en attente d'envoi</div>` : ''}
         DOXAL · RTM Intelligence<br>Données partagées, synchronisées en temps réel.
       </div>
     </aside>
@@ -1201,7 +1298,7 @@ function renderShellHTML(user){
           <div class="topbar-title">${PAGE_TITLES[APP.route] || ''}</div>
         </div>
         <div class="topbar-right">
-          <div class="sync-label"><span class="sync-dot"></span>Synchronisé en temps réel</div>
+          <div class="sync-label">${OfflineQueue.count() ? `<span class="sync-dot" style="background:var(--warning)"></span>${OfflineQueue.count()} en attente — hors ligne` : `<span class="sync-dot"></span>Synchronisé en temps réel`}</div>
           <button class="profile-chip" id="profile-switch"><div class="avatar">${initials(user.nom)}</div><span>${escapeHtml(user.nom)}</span>${icon('logout')}</button>
         </div>
       </div>
@@ -1224,6 +1321,8 @@ function wireShell(user){
   if(sw) sw.addEventListener('click', ()=>{ clearSession(); setRoute('#/login'); });
   const updateBtn = document.getElementById('app-update-btn');
   if(updateBtn) updateBtn.addEventListener('click', forceAppUpdate);
+  const offlineBadge = document.getElementById('offline-queue-badge');
+  if(offlineBadge) offlineBadge.addEventListener('click', ()=>{ toast('Tentative de synchronisation…', 'good'); flushOfflineQueue(); });
 }
 // Recharge l'application en forçant la récupération de la toute dernière version publiée :
 // vide le cache du navigateur si disponible, puis navigue vers une URL jamais vue auparavant
@@ -1710,8 +1809,11 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
         nombreVisites: Number(box.querySelector('#ci-nb').value)||0,
         joursVisite: [...joursSet],
       };
-      try{ await APP.db.doc(`clients_rtm/${clientId}`).update(payload); toast('Informations client mises à jour.', 'good'); backdrop.remove(); }
-      catch(e){ toast('Échec de la mise à jour.', 'critical'); }
+      try{
+        const r = await dbUpdate('clients_rtm', clientId, payload, APP.clients, `Infos client ${c.nom}`);
+        toast(r.queued ? "Hors connexion — informations enregistrées sur l'appareil, seront envoyées automatiquement." : 'Informations client mises à jour.', r.queued?'warning':'good');
+        backdrop.remove();
+      }catch(e){ toast('Échec de la mise à jour.', 'critical'); }
     });
   });
   const editCommerciauxBtn = backdrop.querySelector('#edit-commerciaux');
@@ -1734,16 +1836,20 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
       if(!APP.db) return;
       const ids = [...current];
       try{
-        await APP.db.doc(`clients_rtm/${clientId}`).update({ commercialIds: ids, commercialId: ids[0]||null });
-        toast('Commerciaux en charge mis à jour.', 'good'); backdrop.remove();
+        const r = await dbUpdate('clients_rtm', clientId, { commercialIds: ids, commercialId: ids[0]||null }, APP.clients, `Commerciaux de ${c.nom}`);
+        toast(r.queued ? "Hors connexion — modification enregistrée sur l'appareil, sera envoyée automatiquement." : 'Commerciaux en charge mis à jour.', r.queued?'warning':'good');
+        backdrop.remove();
       }catch(e){ toast('Échec de la mise à jour.', 'critical'); }
     });
   });
   const toggleFrigoBtn = backdrop.querySelector('#toggle-frigo');
   if(toggleFrigoBtn) toggleFrigoBtn.addEventListener('click', async ()=>{
     if(!APP.db) return;
-    try{ await APP.db.doc(`clients_rtm/${clientId}`).update({aFrigo: !c.aFrigo}); toast('Statut frigo mis à jour.', 'good'); backdrop.remove(); }
-    catch(e){ toast('Échec de la mise à jour.', 'critical'); }
+    try{
+      const r = await dbUpdate('clients_rtm', clientId, {aFrigo: !c.aFrigo}, APP.clients, `Frigo ${c.nom}`);
+      toast(r.queued ? "Hors connexion — enregistré sur l'appareil, sera envoyé automatiquement." : 'Statut frigo mis à jour.', r.queued?'warning':'good');
+      backdrop.remove();
+    }catch(e){ toast('Échec de la mise à jour.', 'critical'); }
   });
   if(canRecordVisit) renderVisitForm(backdrop.querySelector('#visit-form-body'), c, user, existingToday, backdrop);
 }
@@ -1839,12 +1945,15 @@ function renderVisitForm(box, c, user, existing, backdrop){
       payload.statut='non_vendu'; payload.produitsVendus=[]; payload.montantTotal=0; payload.raisonNonAchat=raison;
     }
     try{
-      await APP.db.collection('visites').add(payload);
+      const vr = await dbCreate('visites', payload, APP.visites, `Passage ${c.nom}`);
       if(vendu && (c.statut==='prospect' || c.statut==='a_valider')){
-        try{ await APP.db.doc(`clients_rtm/${c.id}`).update({statut:'a_valider', venteEnAttenteDate: todayISO()}); toast('Vente enregistrée — en attente de création du compte par l\'ADV.', 'good'); }
+        try{
+          const cr = await dbUpdate('clients_rtm', c.id, {statut:'a_valider', venteEnAttenteDate: todayISO()}, APP.clients, `Statut ${c.nom}`);
+          toast((vr.queued||cr.queued) ? "Hors connexion — vente enregistrée sur l'appareil, sera envoyée automatiquement." : 'Vente enregistrée — en attente de création du compte par l\'ADV.', 'good');
+        }
         catch(e){ toast('Passage enregistré.', 'good'); }
       } else {
-        toast('Passage enregistré.', 'good');
+        toast(vr.queued ? "Hors connexion — passage enregistré sur l'appareil, sera envoyé automatiquement." : 'Passage enregistré.', 'good');
       }
       if(backdrop) backdrop.remove();
     }catch(e){ toast('Échec de l\'enregistrement.', 'critical'); btn.disabled=false; btn.textContent='Enregistrer le passage'; }
@@ -2138,8 +2247,8 @@ function renderAvecClient(box, content, user, commercialId, preselect){
         notes: rest.querySelector('#fa-notes').value.trim(), gps: gps.value,
       };
       try{
-        await APP.db.collection('fichesSuperviseur').add(payload);
-        toast('Fiche enregistrée.', 'good');
+        const r = await dbCreate('fichesSuperviseur', payload, APP.fiches, `Fiche ${c.nom}`);
+        toast(r.queued ? "Hors connexion — fiche enregistrée sur l'appareil, sera envoyée automatiquement." : 'Fiche enregistrée.', 'good');
         renderFiche(content, user);
       }catch(e){ toast('Échec de l\'enregistrement.', 'critical'); btn.disabled=false; btn.textContent='Enregistrer la fiche'; }
     });
@@ -2182,14 +2291,15 @@ function renderAvecProspect(box, content, user, commercialId){
       lat: gps.value ? gps.value.lat : fallback[0], lng: gps.value ? gps.value.lng : fallback[1],
     };
     try{
-      const ref = await APP.db.collection('clients_rtm').add(clientPayload);
-      await APP.db.collection('fichesSuperviseur').add({
-        superviseurId: user.id, commercialId, clientId: ref.id, date: todayISO(), timestamp: new Date().toISOString(),
+      const cr = await dbCreate('clients_rtm', clientPayload, APP.clients, `Prospect ${nom}`);
+      const fr = await dbCreate('fichesSuperviseur', {
+        superviseurId: user.id, commercialId, clientId: cr.id, date: todayISO(), timestamp: new Date().toISOString(),
         modeVisite:'avec_commercial_prospection', produitsPresents: [], commercialVerifie: true,
         clientsProspectes: [{nom, zone, contact}], nouveauxClients: [],
         notes: box.querySelector('#fap-notes').value.trim(), gps: gps.value,
-      });
-      toast(commercial ? `Prospect transmis à ${commercial.nom} pour visite.` : 'Prospect enregistré.', 'good');
+      }, APP.fiches, `Fiche prospection ${nom}`);
+      const queued = cr.queued || fr.queued;
+      toast(queued ? "Hors connexion — prospect enregistré sur l'appareil, sera envoyé automatiquement." : (commercial ? `Prospect transmis à ${commercial.nom} pour visite.` : 'Prospect enregistré.'), 'good');
       renderFiche(content, user);
     }catch(e){ toast('Échec de l\'enregistrement.', 'critical'); btn.disabled=false; btn.textContent='Transmettre ce prospect'; }
   });
@@ -2297,8 +2407,8 @@ function renderSansClient(box, content, user, preselect){
         notes: rest.querySelector('#fs-notes').value.trim(), gps: gps.value,
       };
       try{
-        await APP.db.collection('fichesSuperviseur').add(payload);
-        toast('Fiche enregistrée.', 'good');
+        const r = await dbCreate('fichesSuperviseur', payload, APP.fiches, `Fiche ${c.nom}`);
+        toast(r.queued ? "Hors connexion — fiche enregistrée sur l'appareil, sera envoyée automatiquement." : 'Fiche enregistrée.', 'good');
         renderFiche(content, user);
       }catch(e){ toast('Échec de l\'enregistrement.', 'critical'); btn.disabled=false; btn.textContent='Enregistrer la fiche'; }
     });
@@ -2349,14 +2459,15 @@ function renderSansProspect(box, content, user){
       lat: gps.value ? gps.value.lat : fallback[0], lng: gps.value ? gps.value.lng : fallback[1],
     };
     try{
-      const ref = await APP.db.collection('clients_rtm').add(clientPayload);
-      await APP.db.collection('fichesSuperviseur').add({
-        superviseurId: user.id, commercialId: responsable ? responsable.id : null, clientId: ref.id, date: todayISO(), timestamp: new Date().toISOString(),
+      const cr = await dbCreate('clients_rtm', clientPayload, APP.clients, `Prospect ${nom}`);
+      const fr = await dbCreate('fichesSuperviseur', {
+        superviseurId: user.id, commercialId: responsable ? responsable.id : null, clientId: cr.id, date: todayISO(), timestamp: new Date().toISOString(),
         modeVisite:'seul_prospection', produitsPresents: [], commercialVerifie: false,
         clientsProspectes: [{nom, zone, contact}], nouveauxClients: [],
         notes: box.querySelector('#fp-notes').value.trim(), gps: gps.value,
-      });
-      toast(responsable ? `Prospect transmis à ${responsable.nom} pour visite.` : 'Prospect enregistré (aucun commercial assigné à cette zone).', 'good');
+      }, APP.fiches, `Fiche prospection ${nom}`);
+      const queued = cr.queued || fr.queued;
+      toast(queued ? "Hors connexion — prospect enregistré sur l'appareil, sera envoyé automatiquement." : (responsable ? `Prospect transmis à ${responsable.nom} pour visite.` : 'Prospect enregistré (aucun commercial assigné à cette zone).'), 'good');
       renderFiche(content, user);
     }catch(e){ toast('Échec de l\'enregistrement.', 'critical'); btn.disabled=false; btn.textContent='Transmettre ce prospect'; }
   });
@@ -2629,8 +2740,8 @@ function renderPricing(content, user){
       photo: photoDataUrl, date: todayISO(), timestamp: new Date().toISOString(), gps: gps.value,
     };
     try{
-      await APP.db.collection('relevesPrix').add(payload);
-      toast('Relevé de prix enregistré.', 'good');
+      const r = await dbCreate('relevesPrix', payload, APP.relevesPrix, `Relevé prix ${produit}`);
+      toast(r.queued ? "Hors connexion — relevé enregistré sur l'appareil, sera envoyé automatiquement." : 'Relevé de prix enregistré.', 'good');
       renderPricing(content, user);
     }catch(e){ toast('Échec de l\'enregistrement.', 'critical'); btn.disabled = false; btn.textContent = icon('camera')+' Enregistrer le relevé'; }
   });
@@ -3189,8 +3300,8 @@ function renderTourneeProspecter(body, user){
       lat: gps.value ? gps.value.lat : fallback[0], lng: gps.value ? gps.value.lng : fallback[1],
     };
     try{
-      await APP.db.collection('clients_rtm').add(payload);
-      toast('Prospect enregistré. Retrouvez-le dans votre historique de prospection.', 'good');
+      const r = await dbCreate('clients_rtm', payload, APP.clients, `Prospect ${nom}`);
+      toast(r.queued ? "Hors connexion — prospect enregistré sur l'appareil, sera envoyé automatiquement." : 'Prospect enregistré. Retrouvez-le dans votre historique de prospection.', 'good');
       setRoute('#/prospects');
     }catch(e){ toast('Échec de l\'ajout.', 'critical'); btn.disabled=false; btn.textContent='Enregistrer ce prospect'; }
   });
@@ -3442,8 +3553,8 @@ function renderComptesAValider(content, user){
       if(exists){ toast('Ce code est déjà utilisé par un autre client.', 'critical'); return; }
       btn.disabled = true; btn.textContent = 'Création…';
       try{
-        await APP.db.doc(`clients_rtm/${cid}`).update({code, statut:'actif', dateActivation: todayISO(), activePar: user.id});
-        toast('Compte créé — le client est maintenant actif dans la base du commercial.', 'good');
+        const r = await dbUpdate('clients_rtm', cid, {code, statut:'actif', dateActivation: todayISO(), activePar: user.id}, APP.clients, `Activation ${code}`);
+        toast(r.queued ? "Hors connexion — activation enregistrée sur l'appareil, sera envoyée automatiquement." : 'Compte créé — le client est maintenant actif dans la base du commercial.', 'good');
         apply();
       }catch(e){ toast('Échec de la création du compte.', 'critical'); btn.disabled=false; btn.textContent='Créer le compte'; }
     }));

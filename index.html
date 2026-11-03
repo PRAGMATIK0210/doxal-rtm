@@ -3451,7 +3451,11 @@ async function exportClientsQrPDF(clients, triggerBtn){
     clients.forEach((c, idx)=>{
       if(y + cellH > 800){ doc.addPage(); x = marginX; y = marginY; col = 0; }
       const dataUrl = dataUrls[idx];
-      if(dataUrl){ try{ doc.addImage(dataUrl, 'PNG', x + (cellW-qrSize)/2, y, qrSize, qrSize); }catch(e){} }
+      // Compression 'SLOW' : sans elle, jsPDF stocke chaque QR en bitmap brut non compressé
+      // (~270 Ko par QR, soit plus de 150 Mo pour une feuille de 600 clients) — avec elle, on
+      // retombe à la taille normale d'un PNG (quelques Ko par QR), fichier utilisable et
+      // partageable, sans perte de lisibilité du QR code.
+      if(dataUrl){ try{ doc.addImage(dataUrl, 'PNG', x + (cellW-qrSize)/2, y, qrSize, qrSize, undefined, 'SLOW'); }catch(e){} }
       doc.setFont('helvetica','bold'); doc.setFontSize(10);
       doc.text(String(c.nom||'').slice(0,26), x + cellW/2, y + qrSize + 16, {align:'center', maxWidth: cellW-6});
       doc.setFont('helvetica','normal'); doc.setFontSize(8.5);

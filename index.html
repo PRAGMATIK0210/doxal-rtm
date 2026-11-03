@@ -3400,6 +3400,21 @@ function renderClientsDB(content, user){
 // (grille de vignettes nom + code + QR code), prête à découper et coller sur chaque point de vente.
 async function exportClientsQrPDF(clients, triggerBtn){
   if(typeof window.jspdf === 'undefined'){ toast('Bibliothèque PDF non chargée. Vérifiez votre connexion.', 'critical'); return; }
+  // Un même client physique peut exister en plusieurs lignes (doublons historiques d'import,
+  // un par commercial partagé) — on ne veut l'imprimer qu'une seule fois. On dédoublonne par
+  // code client (ou par id si le code manque), en gardant la première ligne rencontrée ; ses
+  // commerciaux partagés sont déjà fusionnés dans commercialIds sur chaque ligne du groupe.
+  {
+    const seenCodes = new Set();
+    const deduped = [];
+    for(const c of clients){
+      const key = c.code || c.id;
+      if(seenCodes.has(key)) continue;
+      seenCodes.add(key);
+      deduped.push(c);
+    }
+    clients = deduped;
+  }
   // Générer une feuille pour toute la base (plusieurs milliers de clients) n'a pas de sens à
   // imprimer et peut faire planter la génération (mémoire, PDF énorme) selon l'appareil — on
   // guide plutôt vers un filtre (par commercial typiquement) pour une feuille utilisable.

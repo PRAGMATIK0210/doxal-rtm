@@ -3400,6 +3400,12 @@ function renderClientsDB(content, user){
 // (grille de vignettes nom + code + QR code), prête à découper et coller sur chaque point de vente.
 async function exportClientsQrPDF(clients, triggerBtn){
   if(typeof window.jspdf === 'undefined'){ toast('Bibliothèque PDF non chargée. Vérifiez votre connexion.', 'critical'); return; }
+  // Avant, chaque QR code était généré un par un (environ 80ms minimum chacun) : pour une liste
+  // de plusieurs centaines de clients, le bouton restait bloqué sur "Génération…" plusieurs
+  // dizaines de secondes sans aucun retour, ce qui donnait l'impression que ça ne marchait pas.
+  if(clients.length > 80 && !confirm(`Génération de ${clients.length} QR codes — cela peut prendre une minute ou plus. Continuer ?`)){
+    return;
+  }
   const origLabel = triggerBtn ? triggerBtn.innerHTML : null;
   if(triggerBtn){ triggerBtn.disabled = true; triggerBtn.textContent = 'Génération…'; }
   try{
@@ -3409,9 +3415,19 @@ async function exportClientsQrPDF(clients, triggerBtn){
     let x = marginX, y = marginY, col = 0;
     doc.setFont('helvetica','bold'); doc.setFontSize(14);
     doc.text('DOXAL — Feuille de QR codes clients', marginX, 24);
-    for(const c of clients){
+    // Génère les QR codes par lots en parallèle (au lieu d'un par un) — beaucoup plus rapide sur
+    // de grandes listes — avec une progression visible sur le bouton pour montrer que ça avance.
+    const BATCH_SIZE = 20;
+    const dataUrls = new Array(clients.length);
+    for(let i=0; i<clients.length; i+=BATCH_SIZE){
+      const batch = clients.slice(i, i+BATCH_SIZE);
+      const results = await Promise.all(batch.map(c => qrCodeDataURL(qrUrlForClient(c.id), 260)));
+      results.forEach((url, j)=>{ dataUrls[i+j] = url; });
+      if(triggerBtn){ triggerBtn.textContent = `Génération… ${Math.min(i+BATCH_SIZE, clients.length)}/${clients.length}`; }
+    }
+    clients.forEach((c, idx)=>{
       if(y + cellH > 800){ doc.addPage(); x = marginX; y = marginY; col = 0; }
-      const dataUrl = await qrCodeDataURL(qrUrlForClient(c.id), 260);
+      const dataUrl = dataUrls[idx];
       if(dataUrl){ try{ doc.addImage(dataUrl, 'PNG', x + (cellW-qrSize)/2, y, qrSize, qrSize); }catch(e){} }
       doc.setFont('helvetica','bold'); doc.setFontSize(10);
       doc.text(String(c.nom||'').slice(0,26), x + cellW/2, y + qrSize + 16, {align:'center', maxWidth: cellW-6});
@@ -3420,7 +3436,7 @@ async function exportClientsQrPDF(clients, triggerBtn){
       col++;
       if(col>=cols){ col=0; x = marginX; y += cellH; }
       else { x += cellW; }
-    }
+    });
     doc.save(`doxal-qr-codes-clients-${todayISO()}.pdf`);
     toast(`Feuille PDF générée pour ${clients.length} client(s).`, 'good');
   }catch(e){ toast('Échec de la génération de la feuille PDF.', 'critical'); }

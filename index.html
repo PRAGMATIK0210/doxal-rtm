@@ -3400,6 +3400,14 @@ function renderClientsDB(content, user){
 // (grille de vignettes nom + code + QR code), prête à découper et coller sur chaque point de vente.
 async function exportClientsQrPDF(clients, triggerBtn){
   if(typeof window.jspdf === 'undefined'){ toast('Bibliothèque PDF non chargée. Vérifiez votre connexion.', 'critical'); return; }
+  // Générer une feuille pour toute la base (plusieurs milliers de clients) n'a pas de sens à
+  // imprimer et peut faire planter la génération (mémoire, PDF énorme) selon l'appareil — on
+  // guide plutôt vers un filtre (par commercial typiquement) pour une feuille utilisable.
+  const MAX_CLIENTS = 600;
+  if(clients.length > MAX_CLIENTS){
+    toast(`Trop de clients pour une seule feuille (${clients.length}). Filtrez par commercial ou secteur d'abord (maximum ${MAX_CLIENTS} à la fois).`, 'critical');
+    return;
+  }
   // Avant, chaque QR code était généré un par un (environ 80ms minimum chacun) : pour une liste
   // de plusieurs centaines de clients, le bouton restait bloqué sur "Génération…" plusieurs
   // dizaines de secondes sans aucun retour, ce qui donnait l'impression que ça ne marchait pas.
@@ -3439,7 +3447,12 @@ async function exportClientsQrPDF(clients, triggerBtn){
     });
     doc.save(`doxal-qr-codes-clients-${todayISO()}.pdf`);
     toast(`Feuille PDF générée pour ${clients.length} client(s).`, 'good');
-  }catch(e){ toast('Échec de la génération de la feuille PDF.', 'critical'); }
+  }catch(e){
+    console.error('exportClientsQrPDF failed:', e);
+    // Message plus précis qu'avant (incluait seulement un texte générique) pour pouvoir
+    // diagnostiquer la vraie cause si ça échoue encore.
+    toast('Échec de la génération de la feuille PDF' + (e && e.message ? (' : ' + e.message) : '') + '.', 'critical');
+  }
   if(triggerBtn){ triggerBtn.disabled = false; triggerBtn.innerHTML = origLabel; }
 }
 

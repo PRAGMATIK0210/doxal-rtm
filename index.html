@@ -1152,38 +1152,50 @@ function renderLoginHTML(){
 }
 function initials(nom){ return (nom||'?').split(' ').map(s=>s[0]).slice(0,2).join('').toUpperCase(); }
 
-function findProfilByCredentials(username, password){
-  const u = (username||'').trim().toLowerCase();
-  const pw = (password||'').trim().toLowerCase();
+// La vérification des identifiants se fait désormais côté serveur (fonction Postgres
+// login_profil, sécurisée) : le mot de passe n'est jamais stocké ni transmis en clair, et
+// n'est plus jamais présent dans les données chargées par l'application. Voir la table
+// profil_secrets (verrouillée, inaccessible directement) côté Supabase.
+async function findProfilByCredentials(username, password){
+  const u = (username||'').trim();
+  const pw = (password||'').trim();
   if(!u || !pw) return null;
-  return [...APP.profils.values()].find(p=>{
-    const ident = (p.identifiant || p.nom || '').trim().toLowerCase();
-    const pass = (p.motDePasse || '').trim().toLowerCase();
-    return ident===u && pass===pw;
-  }) || null;
+  const { data, error } = await APP.sb.rpc('login_profil', { p_identifiant: u, p_password: pw });
+  if(error) throw error;
+  if(!data) return null;
+  return Object.assign({id: data.id}, data.fields);
 }
 
 function wireLogin(){
   const form = document.getElementById('login-form');
   if(!form) return;
-  form.addEventListener('submit', (e)=>{
+  form.addEventListener('submit', async (e)=>{
     e.preventDefault();
     const userInput = document.getElementById('login-user');
     const passInput = document.getElementById('login-pass');
     const errBox = document.getElementById('login-error');
-    const p = findProfilByCredentials(userInput.value, passInput.value);
-    if(!p){
-      errBox.textContent = "Nom d'utilisateur ou mot de passe incorrect.";
-      errBox.style.display = 'block';
-      return;
-    }
+    const submitBtn = form.querySelector('button[type="submit"]');
     errBox.style.display = 'none';
-    APP.currentUser = p;
-    saveSession(p.id);
-    // Si la connexion a été déclenchée par un lien de QR code scanné avant d'être connecté,
-    // on conserve cette route pour être redirigé directement vers le bon client après le login.
-    const pendingQrRoute = (APP.route && APP.route.indexOf('#/qr/')===0) ? APP.route : null;
-    setRoute(pendingQrRoute || defaultRoute(p));
+    if(submitBtn){ submitBtn.disabled = true; submitBtn.dataset.origLabel = submitBtn.dataset.origLabel || submitBtn.textContent; submitBtn.textContent = 'Connexion…'; }
+    try{
+      const p = await findProfilByCredentials(userInput.value, passInput.value);
+      if(!p){
+        errBox.textContent = "Nom d'utilisateur ou mot de passe incorrect.";
+        errBox.style.display = 'block';
+        return;
+      }
+      APP.currentUser = p;
+      saveSession(p.id);
+      // Si la connexion a été déclenchée par un lien de QR code scanné avant d'être connecté,
+      // on conserve cette route pour être redirigé directement vers le bon client après le login.
+      const pendingQrRoute = (APP.route && APP.route.indexOf('#/qr/')===0) ? APP.route : null;
+      setRoute(pendingQrRoute || defaultRoute(p));
+    }catch(err){
+      errBox.textContent = "Connexion impossible — vérifiez votre connexion internet et réessayez.";
+      errBox.style.display = 'block';
+    }finally{
+      if(submitBtn){ submitBtn.disabled = false; submitBtn.textContent = submitBtn.dataset.origLabel || 'Se connecter'; }
+    }
   });
 }
 

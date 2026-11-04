@@ -1795,6 +1795,31 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
   if(editInfosBtn) editInfosBtn.addEventListener('click', ()=>{
     const box = backdrop.querySelector('#infos-edit-box');
     const zoneOpts = zonesForSecteur(c.secteur);
+    let gpsCaptured = null;
+    function renderCiGpsBox(){
+      const gpsBox = box.querySelector('#ci-gps-box');
+      if(!gpsBox) return;
+      let statusHtml;
+      if(gpsCaptured){
+        statusHtml = `<b>✓ Nouvelle position capturée</b> — sera enregistrée à l'enregistrement.`;
+      } else if(clientPositionIsFallback(c)){
+        statusHtml = `<b>⚠ Position non confirmée</b> — ce client utilise encore le point générique du secteur. Rendez-vous sur place puis appuyez sur le bouton pour enregistrer la vraie position du point de vente.`;
+      } else {
+        statusHtml = `<b>✓ Position enregistrée</b> pour ce point de vente.`;
+      }
+      gpsBox.innerHTML = `${statusHtml}
+        <div style="margin-top:6px;"><button class="btn sm" id="ci-gps-btn">${icon('pin')} Mettre à jour la position du point de vente</button></div>`;
+      gpsBox.querySelector('#ci-gps-btn').addEventListener('click', ()=>{
+        const btn = gpsBox.querySelector('#ci-gps-btn'); btn.disabled = true; btn.textContent = 'Localisation…';
+        getPositionWithFallback(pos=>{
+          gpsCaptured = {lat: pos.coords.latitude, lng: pos.coords.longitude};
+          renderCiGpsBox();
+        }, err=>{
+          toast('Position indisponible ('+(err.message||'refusée')+').', 'warning');
+          renderCiGpsBox();
+        });
+      });
+    }
     box.innerHTML = `<div class="divider"></div>
       <div class="form-grid">
         <label class="field">Zone<select id="ci-zone"><option value="">Choisir…</option>${zoneOpts.map(z=>`<option ${c.zone===z?'selected':''}>${escapeHtml(z)}</option>`).join('')}</select></label>
@@ -1804,6 +1829,7 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
       <div class="field" style="margin-top:8px;">Jours de visite
         <div class="checklist-grid" id="ci-jours"></div>
       </div>
+      <div class="gps-box" id="ci-gps-box" style="margin-top:10px;"></div>
       <button class="btn primary sm" id="ci-save" style="margin-top:10px;">Enregistrer</button>`;
     const joursSet = new Set(c.joursVisite||[]);
     const jb = box.querySelector('#ci-jours');
@@ -1813,6 +1839,7 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
       it.addEventListener('click', ()=>{ if(joursSet.has(j)){joursSet.delete(j);it.classList.remove('on');} else {joursSet.add(j);it.classList.add('on');} });
       jb.appendChild(it);
     });
+    renderCiGpsBox();
     box.querySelector('#ci-save').addEventListener('click', async ()=>{
       if(!APP.db) return;
       const payload = {
@@ -1820,6 +1847,7 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
         telephone: box.querySelector('#ci-tel').value.trim(),
         nombreVisites: Number(box.querySelector('#ci-nb').value)||0,
         joursVisite: [...joursSet],
+        ...(gpsCaptured ? {lat: gpsCaptured.lat, lng: gpsCaptured.lng} : {}),
       };
       try{
         const r = await dbUpdate('clients_rtm', clientId, payload, APP.clients, `Infos client ${c.nom}`);
@@ -3207,6 +3235,15 @@ function secteursForEquipe(user){
 function isClientVerified(c){
   return !!(c.secteur && c.zone && c.telephone && c.nombreVisites && (c.joursVisite||[]).length);
 }
+// Les clients importés depuis l'Excel n'ont jamais eu de vraie position GPS : ils ont reçu, comme
+// tout client sans position, le point générique du secteur (SECTEUR_FALLBACK_COORD) utilisé par
+// défaut. Cette fonction permet de distinguer « position jamais confirmée sur place » (toujours
+// égale au point générique) d'une vraie position déjà capturée par un commercial chez le client.
+function clientPositionIsFallback(c){
+  if(c.lat==null || c.lng==null) return true;
+  const fb = SECTEUR_FALLBACK_COORD[c.secteur] || [DAKAR_COORD.lat, DAKAR_COORD.lng];
+  return Math.abs(c.lat-fb[0])<0.0001 && Math.abs(c.lng-fb[1])<0.0001;
+}
 
 function firstSaleFor(clientId){
   const ventes = visitesForClient(clientId).filter(v=>v.statut==='vendu');
@@ -3328,11 +3365,18 @@ function renderClientsDB(content, user){
     <div class="page-head"><div><h1>Base de données clients</h1><p class="page-sub">${list.length} point${list.length>1?'s':''} de vente${isCommercial?' dans votre portefeuille':''}</p></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         ${canScanLookup ? `<button class="btn primary" id="go-scan-lookup">${icon('camera')} Scanner un client</button>` : ''}
-        ${!isCommercial ? `<select id="filter-commercial"><option value="">Tous les commerciaux</option>${[...APP.profils.values()].filter(p=>p.role==='commercial').map(p=>`<option value="${p.id}">${escapeHtml(p.nom)}</option>`).join('')}</select>` : ''}
-        <select id="filter-secteur"><option value="">Tous les secteurs</option>${SECTEUR_NAMES.map(s=>`<option>${escapeHtml(s)}</option>`).join('')}</select>
-        <select id="filter-statut"><option value="">Statut : tous</option><option value="actif">Actifs</option><option value="a_valider">En attente ADV</option><option value="prospect">Prospects</option></select>
         <button class="btn" id="clients-qr-pdf">${icon('camera')} Feuille de QR codes</button>
       </div>
+    </div>
+    <div class="card" style="padding:10px 14px;margin-bottom:14px;">
+      <label class="field" style="margin:0;">Rechercher un client
+        <input type="text" id="filter-search" placeholder="Nom, code, téléphone ou zone…">
+      </label>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+      ${!isCommercial ? `<select id="filter-commercial"><option value="">Tous les commerciaux</option>${[...APP.profils.values()].filter(p=>p.role==='commercial').map(p=>`<option value="${p.id}">${escapeHtml(p.nom)}</option>`).join('')}</select>` : ''}
+      <select id="filter-secteur"><option value="">Tous les secteurs</option>${SECTEUR_NAMES.map(s=>`<option>${escapeHtml(s)}</option>`).join('')}</select>
+      <select id="filter-statut"><option value="">Statut : tous</option><option value="actif">Actifs</option><option value="a_valider">En attente ADV</option><option value="prospect">Prospects</option></select>
     </div>
     ${canScanLookup ? `<div class="banner" style="margin-bottom:14px;">${icon('camera')} Scannez le QR code collé chez un client pour ouvrir directement sa fiche : vous y verrez quel commercial est passé, les ventes effectuées et quel superviseur est passé, avec la date et l'heure de chaque passage.</div>` : ''}
     ${isCommercial ? `<div class="banner" style="margin-bottom:14px;">Complétez le secteur (auto), la zone, le téléphone, le nombre de visites et les jours de visite de chaque client : tant qu'une information manque, il apparaît « non vérifié » ci-dessous. Cliquez sur une ligne pour compléter.</div>` : ''}
@@ -3352,11 +3396,18 @@ function renderClientsDB(content, user){
     });
   });
   let currentFiltered = [];
+  // Comparaison insensible aux accents et à la casse, pour que « diourbel » trouve « DIOURBEL »
+  // et que les fautes de frappe sur les accents n'empêchent pas de trouver un client.
+  function normalizeSearch(s){
+    return String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  }
   function apply(){
     const com = content.querySelector('#filter-commercial') ? content.querySelector('#filter-commercial').value : '';
     const sec = content.querySelector('#filter-secteur').value;
     const st = content.querySelector('#filter-statut').value;
-    const filtered = list.filter(c=> (!com||clientHasCommercial(c, com)) && (!sec||c.secteur===sec) && (!st||c.statut===st));
+    const q = normalizeSearch(content.querySelector('#filter-search').value.trim());
+    const filtered = list.filter(c=> (!com||clientHasCommercial(c, com)) && (!sec||c.secteur===sec) && (!st||c.statut===st)
+      && (!q || [c.nom, c.code, c.telephone, c.zone, c.secteur].some(v=> v && normalizeSearch(v).includes(q))));
     currentFiltered = filtered;
     const tb = content.querySelector('#clients-tbody');
     tb.innerHTML = filtered.map(c=>{
@@ -3387,6 +3438,7 @@ function renderClientsDB(content, user){
   }
   content.querySelector('#filter-secteur').addEventListener('change', apply);
   content.querySelector('#filter-statut').addEventListener('change', apply);
+  content.querySelector('#filter-search').addEventListener('input', apply);
   const comSel = content.querySelector('#filter-commercial');
   if(comSel) comSel.addEventListener('change', apply);
   content.querySelector('#clients-qr-pdf').addEventListener('click', (e)=>{

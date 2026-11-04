@@ -414,6 +414,12 @@ function makeSupabaseDbShim(sb){
         const { error } = await sb.from(name).upsert({ id, fields: data });
         if(error) throw error;
       },
+      // Supprime définitivement la ligne. Utilisé uniquement pour la suppression d'un client par
+      // l'ADV depuis la Base de données clients (dbDelete ci-dessous).
+      remove: async () => {
+        const { error } = await sb.from(name).delete().eq('id', id);
+        if(error) throw error;
+      },
     };
   }
   return { collection, doc };
@@ -886,6 +892,18 @@ async function dbUpdate(collectionName, docId, payload, map, label){
   OfflineQueue.add({qid: genLocalId(), kind:'update', collection:collectionName, docId, payload, label, ts: Date.now()});
   return {queued:true};
 }
+// Supprime définitivement un document (pour l'instant utilisé uniquement pour la suppression d'un
+// client par l'ADV depuis la Base de données clients). Contrairement à dbCreate/dbUpdate, une
+// suppression hors ligne n'est PAS mise en file d'attente : l'app ne pourrait pas distinguer plus
+// tard « ce client a été supprimé » de « cette suppression n'a pas encore été synchronisée », ce
+// qui risquerait de faire réapparaître un client qu'on croyait supprimé, ou l'inverse. On exige
+// donc une connexion active pour cette action, avec un message clair sinon.
+async function dbDelete(collectionName, docId, map, label){
+  if(!navigator.onLine) throw new Error('offline');
+  await withTimeout(APP.db.doc(`${collectionName}/${docId}`).remove(), 8000);
+  if(map) map.delete(docId);
+  scheduleRender();
+}
 
 async function boot(){
   // Reprend la route déjà présente dans l'URL au premier chargement (ex : lien d'un QR code
@@ -1222,6 +1240,7 @@ const ICONS = {
   camera: '<path d="M4 8h3l1.5-2.5h7L17 8h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z"/><circle cx="12" cy="13.5" r="3.5"/>',
   tag: '<path d="M20 12.5 12.5 20a1.5 1.5 0 0 1-2.1 0L4 13.6a1.5 1.5 0 0 1 0-2.1L11.5 4H19a1 1 0 0 1 1 1v7.5Z"/><circle cx="15.5" cy="8.5" r="1.3"/>',
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  trash: '<path d="M4 7h16M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3m2 0-1 13a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1L6 7h12Z"/><path d="M10 11v6M14 11v6"/>',
 };
 function icon(name, cls){ return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="${cls||''}">${ICONS[name]||''}</svg>`; }
 
@@ -1764,6 +1783,12 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
       <div class="card-title" style="margin-bottom:8px;">Passage d'aujourd'hui (${fmtDateFR(todayISO())})</div>
       <div id="visit-form-body"></div>
     </div>` : `<div class="card" style="padding:12px 14px;"><div class="helptext">Lecture seule — seul le commercial en charge de ce client peut enregistrer un passage.</div></div>`}
+
+    ${(!scanMode && user.role==='adv') ? `<div class="card" style="padding:12px 14px;border-color:var(--critical);">
+      <div class="card-title" style="margin-bottom:8px;color:var(--critical);">Zone dangereuse</div>
+      <div class="helptext" style="margin-bottom:10px;">Supprime définitivement ce client de la base de données (fiche, QR code, rattachement commercial). Cette action est irréversible — à réserver aux doublons ou erreurs de création.</div>
+      <button class="btn danger sm" id="delete-client-btn">${icon('trash')} Supprimer ce client</button>
+    </div>` : ''}
   </div>`;
   document.body.appendChild(backdrop);
   backdrop.querySelector('[data-close]').addEventListener('click', ()=>backdrop.remove());
@@ -1890,6 +1915,19 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
       toast(r.queued ? "Hors connexion — enregistré sur l'appareil, sera envoyé automatiquement." : 'Statut frigo mis à jour.', r.queued?'warning':'good');
       backdrop.remove();
     }catch(e){ toast('Échec de la mise à jour.', 'critical'); }
+  });
+  const deleteClientBtn = backdrop.querySelector('#delete-client-btn');
+  if(deleteClientBtn) deleteClientBtn.addEventListener('click', async ()=>{
+    if(!confirm(`Supprimer définitivement ${c.nom} de la base de données ?\n\nCette action est irréversible : la fiche, son QR code et son rattachement commercial seront perdus (l'historique des passages déjà enregistrés reste conservé, mais n'affichera plus le nom du client).`)) return;
+    deleteClientBtn.disabled = true; deleteClientBtn.textContent = 'Suppression…';
+    try{
+      await dbDelete('clients_rtm', clientId, APP.clients, `Suppression ${c.nom}`);
+      toast(`${c.nom} a été supprimé de la base de données.`, 'good');
+      backdrop.remove();
+    }catch(e){
+      toast(e && e.message==='offline' ? 'Suppression impossible hors connexion — réessayez une fois connecté.' : 'Échec de la suppression.', 'critical');
+      deleteClientBtn.disabled = false; deleteClientBtn.innerHTML = `${icon('trash')} Supprimer ce client`;
+    }
   });
   if(canRecordVisit) renderVisitForm(backdrop.querySelector('#visit-form-body'), c, user, existingToday, backdrop);
 }

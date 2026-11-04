@@ -558,7 +558,7 @@ function openQrScanner(opts){
   backdrop.querySelector('#qrscan-manual-submit').addEventListener('click', ()=>{
     const code = backdrop.querySelector('#qrscan-manual-input').value.trim();
     if(!code) return;
-    const match = [...APP.clients.values()].find(c=>(c.code||'').toLowerCase()===code.toLowerCase());
+    const match = visibleClients().find(c=>(c.code||'').toLowerCase()===code.toLowerCase());
     if(!match){ setStatus('Aucun client ne correspond à ce code.', 'error'); return; }
     if(opts.validate){
       const v = opts.validate(match);
@@ -974,11 +974,20 @@ function clientCommerciauxInitiales(c){
   const inits = clientCommerciaux(c).map(id=>{ const p = APP.profils.get(id); return p?initialesNomCommercial(p.nom):null; }).filter(Boolean);
   return inits.length ? inits.join('/') : null;
 }
+function clientIsArchived(c){
+  return !!(c && c.archive);
+}
+// Vue "normale" de la base clients : exclut les clients archivés par l'ADV (doublons, erreurs de
+// création...). Utilisé partout sauf pour l'audit Excel complet et la vérification d'unicité des
+// codes clients, qui doivent voir TOUS les clients, archivés ou non.
+function visibleClients(){
+  return [...APP.clients.values()].filter(c=>!c.archive);
+}
 function myClients(commercialId){
-  return [...APP.clients.values()].filter(c=>clientHasCommercial(c, commercialId) && c.statut==='actif');
+  return visibleClients().filter(c=>clientHasCommercial(c, commercialId) && c.statut==='actif');
 }
 function myProspects(commercialId){
-  return [...APP.clients.values()].filter(c=>clientHasCommercial(c, commercialId) && c.statut==='prospect');
+  return visibleClients().filter(c=>clientHasCommercial(c, commercialId) && c.statut==='prospect');
 }
 function responsibleCommercialForZone(zone){
   const secteur = secteurForZone(zone);
@@ -986,7 +995,7 @@ function responsibleCommercialForZone(zone){
   return [...APP.profils.values()].find(p=>p.role==='commercial' && p.secteur===secteur) || null;
 }
 function myProspectsHistory(commercialId){
-  return [...APP.clients.values()].filter(c=>clientHasCommercial(c, commercialId) && (c.statut==='prospect' || c.statut==='a_valider' || c.origineProspection))
+  return visibleClients().filter(c=>clientHasCommercial(c, commercialId) && (c.statut==='prospect' || c.statut==='a_valider' || c.origineProspection))
     .sort((a,b)=> (a.dateCreation||'') < (b.dateCreation||'') ? 1 : -1);
 }
 function fichesForSuperviseur(superviseurId){
@@ -1679,12 +1688,13 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
   const existingToday = visiteToday(clientId, user.id);
   const commerciauxNoms = clientCommerciauxNoms(c);
 
-  const canEditInfo = user.role==='commercial' && clientHasCommercial(c, user.id);
-  const canRecordVisit = user.role==='commercial' && clientHasCommercial(c, user.id);
+  const canEditInfo = !c.archive && user.role==='commercial' && clientHasCommercial(c, user.id);
+  const canRecordVisit = !c.archive && user.role==='commercial' && clientHasCommercial(c, user.id);
   const readOnlyViewer = user.role==='direction' || user.role==='adv';
-  const canManageCommerciaux = user.role==='superviseur' || user.role==='adv' || user.role==='direction';
+  const canManageCommerciaux = !c.archive && (user.role==='superviseur' || user.role==='adv' || user.role==='direction');
   let statutPillHtml = '';
-  if(c.statut==='prospect') statutPillHtml = '<span class="status-pill warning">Prospect</span>';
+  if(c.archive) statutPillHtml = '<span class="status-pill muted">Archivé</span>';
+  else if(c.statut==='prospect') statutPillHtml = '<span class="status-pill warning">Prospect</span>';
   else if(c.statut==='a_valider') statutPillHtml = '<span class="status-pill muted">En attente ADV</span>';
   else statutPillHtml = isClientVerified(c) ? '<span class="status-pill good">✓ Vérifié</span>' : '<span class="status-pill critical">⚠ Non vérifié</span>';
 
@@ -1723,7 +1733,7 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
     <div class="card" style="padding:12px 14px;">
       <div class="card-head" style="margin-bottom:8px;">
         <div class="card-title">Équipement frigo</div>
-        ${(readOnlyViewer || scanMode) ? '' : `<button class="btn sm" id="toggle-frigo">${c.aFrigo?'Retirer le frigo':'Marquer équipé d\'un frigo'}</button>`}
+        ${(readOnlyViewer || scanMode || c.archive) ? '' : `<button class="btn sm" id="toggle-frigo">${c.aFrigo?'Retirer le frigo':'Marquer équipé d\'un frigo'}</button>`}
       </div>
       <span class="frigo-badge" style="${c.aFrigo?'':'opacity:.4'}">${icon('fridge')} ${c.aFrigo?'Client équipé':'Pas de frigo'}</span>
       ${commerciauxNoms?`<span class="helptext" style="display:block;margin-top:6px;">Commercial en charge : ${escapeHtml(commerciauxNoms)}</span>`:''}
@@ -1784,11 +1794,18 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
       <div id="visit-form-body"></div>
     </div>` : `<div class="card" style="padding:12px 14px;"><div class="helptext">Lecture seule — seul le commercial en charge de ce client peut enregistrer un passage.</div></div>`}
 
-    ${(!scanMode && user.role==='adv') ? `<div class="card" style="padding:12px 14px;border-color:var(--critical);">
+    ${(!scanMode && user.role==='adv') ? (c.archive ? `<div class="card" style="padding:12px 14px;border-color:var(--warning);">
+      <div class="card-title" style="margin-bottom:8px;">Client archivé</div>
+      <div class="helptext" style="margin-bottom:10px;">Ce client a été archivé${c.archivePar?(' par '+escapeHtml((APP.profils.get(c.archivePar)||{}).nom||c.archivePar)):''}${c.archiveDate?(' le '+fmtDateFR(c.archiveDate)):''}. Il n'apparaît plus dans les listes de travail (portefeuilles, recherche, tableaux de bord) mais peut être restauré à tout moment.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn sm" id="restore-client-btn">↺ Restaurer ce client</button>
+        <button class="btn danger sm" id="delete-client-btn">${icon('trash')} Supprimer définitivement</button>
+      </div>
+    </div>` : `<div class="card" style="padding:12px 14px;border-color:var(--critical);">
       <div class="card-title" style="margin-bottom:8px;color:var(--critical);">Zone dangereuse</div>
-      <div class="helptext" style="margin-bottom:10px;">Supprime définitivement ce client de la base de données (fiche, QR code, rattachement commercial). Cette action est irréversible — à réserver aux doublons ou erreurs de création.</div>
-      <button class="btn danger sm" id="delete-client-btn">${icon('trash')} Supprimer ce client</button>
-    </div>` : ''}
+      <div class="helptext" style="margin-bottom:10px;">Archivez ce client pour le retirer des listes de travail (portefeuilles, recherche, tableaux de bord) sans perdre son historique — réservé aux doublons ou erreurs de création. Un client archivé reste restaurable à tout moment.</div>
+      <button class="btn sm" id="archive-client-btn">${icon('trash')} Archiver ce client</button>
+    </div>`) : ''}
   </div>`;
   document.body.appendChild(backdrop);
   backdrop.querySelector('[data-close]').addEventListener('click', ()=>backdrop.remove());
@@ -1916,9 +1933,36 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
       backdrop.remove();
     }catch(e){ toast('Échec de la mise à jour.', 'critical'); }
   });
+  const archiveClientBtn = backdrop.querySelector('#archive-client-btn');
+  if(archiveClientBtn) archiveClientBtn.addEventListener('click', async ()=>{
+    if(!APP.db) return;
+    if(!confirm(`Archiver ${c.nom} ?\n\nCe client sera retiré des listes de travail (portefeuilles, recherche, tableaux de bord) mais pourra être restauré à tout moment depuis sa fiche ou le filtre « Archivés ».`)) return;
+    archiveClientBtn.disabled = true; archiveClientBtn.textContent = 'Archivage…';
+    try{
+      const r = await dbUpdate('clients_rtm', clientId, {archive:true, archiveDate: todayISO(), archivePar: user.id}, APP.clients, `Archivage ${c.nom}`);
+      toast(r.queued ? "Hors connexion — archivage enregistré sur l'appareil, sera envoyé automatiquement." : `${c.nom} a été archivé.`, r.queued?'warning':'good');
+      backdrop.remove();
+    }catch(e){
+      toast('Échec de l\'archivage.', 'critical');
+      archiveClientBtn.disabled = false; archiveClientBtn.innerHTML = `${icon('trash')} Archiver ce client`;
+    }
+  });
+  const restoreClientBtn = backdrop.querySelector('#restore-client-btn');
+  if(restoreClientBtn) restoreClientBtn.addEventListener('click', async ()=>{
+    if(!APP.db) return;
+    restoreClientBtn.disabled = true; restoreClientBtn.textContent = 'Restauration…';
+    try{
+      const r = await dbUpdate('clients_rtm', clientId, {archive:false, archiveDate:null, archivePar:null}, APP.clients, `Restauration ${c.nom}`);
+      toast(r.queued ? "Hors connexion — restauration enregistrée sur l'appareil, sera envoyée automatiquement." : `${c.nom} a été restauré.`, r.queued?'warning':'good');
+      backdrop.remove();
+    }catch(e){
+      toast('Échec de la restauration.', 'critical');
+      restoreClientBtn.disabled = false; restoreClientBtn.innerHTML = '↺ Restaurer ce client';
+    }
+  });
   const deleteClientBtn = backdrop.querySelector('#delete-client-btn');
   if(deleteClientBtn) deleteClientBtn.addEventListener('click', async ()=>{
-    if(!confirm(`Supprimer définitivement ${c.nom} de la base de données ?\n\nCette action est irréversible : la fiche, son QR code et son rattachement commercial seront perdus (l'historique des passages déjà enregistrés reste conservé, mais n'affichera plus le nom du client).`)) return;
+    if(!confirm(`Supprimer DÉFINITIVEMENT ${c.nom} de la base de données ?\n\nCette action est IRRÉVERSIBLE, contrairement à l'archivage : la fiche, son QR code et son rattachement commercial seront perdus pour toujours (l'historique des passages déjà enregistrés reste conservé, mais n'affichera plus le nom du client).`)) return;
     deleteClientBtn.disabled = true; deleteClientBtn.textContent = 'Suppression…';
     try{
       await dbDelete('clients_rtm', clientId, APP.clients, `Suppression ${c.nom}`);
@@ -1926,7 +1970,7 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
       backdrop.remove();
     }catch(e){
       toast(e && e.message==='offline' ? 'Suppression impossible hors connexion — réessayez une fois connecté.' : 'Échec de la suppression.', 'critical');
-      deleteClientBtn.disabled = false; deleteClientBtn.innerHTML = `${icon('trash')} Supprimer ce client`;
+      deleteClientBtn.disabled = false; deleteClientBtn.innerHTML = `${icon('trash')} Supprimer définitivement`;
     }
   });
   if(canRecordVisit) renderVisitForm(backdrop.querySelector('#visit-form-body'), c, user, existingToday, backdrop);
@@ -3030,7 +3074,7 @@ function renderDashboardBody(box, f){
   const vendues = visites.filter(v=>v.statut==='vendu');
   const ca = vendues.reduce((s,v)=>s+v.montantTotal,0);
   const tauxTransfo = visites.length ? Math.round(vendues.length/visites.length*100) : 0;
-  let baseClients = f.commercialId ? myClients(f.commercialId) : [...APP.clients.values()].filter(c=>c.statut==='actif');
+  let baseClients = f.commercialId ? myClients(f.commercialId) : visibleClients().filter(c=>c.statut==='actif');
   if(f.secteur) baseClients = baseClients.filter(c=>c.secteur===f.secteur);
   const plannedToday = baseClients.filter(c=>(c.joursVisite||[]).includes(todayWeekdayFR()));
   const visitedToday = plannedToday.filter(c=> f.commercialId ? visiteToday(c.id, f.commercialId) : clientCommerciaux(c).some(id=>visiteToday(c.id, id)));
@@ -3195,6 +3239,7 @@ async function exportExcel(){
       Commercial: clientCommerciauxNoms(c)||'', ObjectifMensuel:c.objectifMensuel||'',
       NombreVisites:c.nombreVisites||'', JoursVisite:(c.joursVisite||[]).join(', '), Statut:c.statut,
       Verifie: c.statut==='actif' ? (isClientVerified(c)?'Oui':'Non') : '—',
+      Archive: c.archive?'Oui':'Non',
       Origine: c.origineProspection==='superviseur'?'Prospection superviseur':'Terrain',
       DateCreation:c.dateCreation||'', Latitude:c.lat, Longitude:c.lng,
     }));
@@ -3214,11 +3259,11 @@ async function exportExcel(){
       Position: positionStatus(f.gps).label, Notes:f.notes||'',
     }));
     const ym = todayDate().getFullYear()+'-'+pad2(todayDate().getMonth()+1);
-    const objRows = [...APP.clients.values()].map(c=>({
+    const objRows = visibleClients().map(c=>({
       Client:c.nom, Zone:c.zone, Commercial:clientCommerciauxNoms(c)||'',
       ObjectifMensuel:suggestObjective(c.id), RealiseMoisEnCours: realizedForClientMonth(c.id, ym),
     }));
-    const prospectsRows = [...APP.clients.values()].filter(c=>c.statut==='prospect' || c.origineProspection).map(c=>{
+    const prospectsRows = visibleClients().filter(c=>c.statut==='prospect' || c.origineProspection).map(c=>{
       const visites = visitesForClient(c.id); const vendues = visites.filter(v=>v.statut==='vendu');
       return {
         Nom:c.nom, Zone:c.zone, Commercial:clientCommerciauxNoms(c)||'',
@@ -3232,8 +3277,9 @@ async function exportExcel(){
       {Indicateur:"Chiffre d'affaires total", Valeur: vendues.reduce((s,v)=>s+v.montantTotal,0)},
       {Indicateur:"Nombre de passages enregistrés", Valeur: APP.visites.size},
       {Indicateur:"Nombre de ventes conclues", Valeur: vendues.length},
-      {Indicateur:"Nombre de clients actifs", Valeur: [...APP.clients.values()].filter(c=>c.statut==='actif').length},
-      {Indicateur:"Clients avec frigo", Valeur: [...APP.clients.values()].filter(c=>c.aFrigo).length},
+      {Indicateur:"Nombre de clients actifs", Valeur: visibleClients().filter(c=>c.statut==='actif').length},
+      {Indicateur:"Clients avec frigo", Valeur: visibleClients().filter(c=>c.aFrigo).length},
+      {Indicateur:"Clients archivés", Valeur: [...APP.clients.values()].filter(c=>c.archive).length},
       {Indicateur:"Date d'export", Valeur: todayISO()},
     ];
     XLSX.utils.book_append_sheet(wb, sheetFromRows(clientsRows), 'Clients');
@@ -3255,7 +3301,7 @@ async function exportExcel(){
 
 /* ============================== DIRECTION / PROSPECTION — NOUVELLES FONCTIONS ============================== */
 function myAValider(commercialId){
-  return [...APP.clients.values()].filter(c=>clientHasCommercial(c, commercialId) && c.statut==='a_valider');
+  return visibleClients().filter(c=>clientHasCommercial(c, commercialId) && c.statut==='a_valider');
 }
 
 function secteurForZone(zone){
@@ -3397,7 +3443,8 @@ function renderTourneeProspecter(body, user){
 function renderClientsDB(content, user){
   const isCommercial = user.role==='commercial';
   const canScanLookup = user.role==='adv' || user.role==='direction' || user.role==='superviseur';
-  let list = isCommercial ? [...APP.clients.values()].filter(c=>clientHasCommercial(c, user.id)) : [...APP.clients.values()];
+  const allClients = isCommercial ? [...APP.clients.values()].filter(c=>clientHasCommercial(c, user.id)) : [...APP.clients.values()];
+  let list = allClients.filter(c=>!c.archive);
   content.innerHTML = `
     ${demoBannerHTML()}
     <div class="page-head"><div><h1>Base de données clients</h1><p class="page-sub">${list.length} point${list.length>1?'s':''} de vente${isCommercial?' dans votre portefeuille':''}</p></div>
@@ -3414,7 +3461,7 @@ function renderClientsDB(content, user){
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
       ${!isCommercial ? `<select id="filter-commercial"><option value="">Tous les commerciaux</option>${[...APP.profils.values()].filter(p=>p.role==='commercial').map(p=>`<option value="${p.id}">${escapeHtml(p.nom)}</option>`).join('')}</select>` : ''}
       <select id="filter-secteur"><option value="">Tous les secteurs</option>${SECTEUR_NAMES.map(s=>`<option>${escapeHtml(s)}</option>`).join('')}</select>
-      <select id="filter-statut"><option value="">Statut : tous</option><option value="actif">Actifs</option><option value="a_valider">En attente ADV</option><option value="prospect">Prospects</option></select>
+      <select id="filter-statut"><option value="">Statut : tous</option><option value="actif">Actifs</option><option value="a_valider">En attente ADV</option><option value="prospect">Prospects</option><option value="archive">Archivés</option></select>
     </div>
     ${canScanLookup ? `<div class="banner" style="margin-bottom:14px;">${icon('camera')} Scannez le QR code collé chez un client pour ouvrir directement sa fiche : vous y verrez quel commercial est passé, les ventes effectuées et quel superviseur est passé, avec la date et l'heure de chaque passage.</div>` : ''}
     ${isCommercial ? `<div class="banner" style="margin-bottom:14px;">Complétez le secteur (auto), la zone, le téléphone, le nombre de visites et les jours de visite de chaque client : tant qu'une information manque, il apparaît « non vérifié » ci-dessous. Cliquez sur une ligne pour compléter.</div>` : ''}
@@ -3444,14 +3491,16 @@ function renderClientsDB(content, user){
     const sec = content.querySelector('#filter-secteur').value;
     const st = content.querySelector('#filter-statut').value;
     const q = normalizeSearch(content.querySelector('#filter-search').value.trim());
-    const filtered = list.filter(c=> (!com||clientHasCommercial(c, com)) && (!sec||c.secteur===sec) && (!st||c.statut===st)
+    const source = st==='archive' ? allClients.filter(c=>c.archive) : list;
+    const filtered = source.filter(c=> (!com||clientHasCommercial(c, com)) && (!sec||c.secteur===sec) && (st==='archive'||!st||c.statut===st)
       && (!q || [c.nom, c.code, c.telephone, c.zone, c.secteur].some(v=> v && normalizeSearch(v).includes(q))));
     currentFiltered = filtered;
     const tb = content.querySelector('#clients-tbody');
     tb.innerHTML = filtered.map(c=>{
       const commercialNoms = clientCommerciauxNoms(c);
       let statutPill;
-      if(c.statut==='prospect') statutPill = '<span class="status-pill warning">Prospect</span>';
+      if(c.archive) statutPill = '<span class="status-pill muted">Archivé</span>';
+      else if(c.statut==='prospect') statutPill = '<span class="status-pill warning">Prospect</span>';
       else if(c.statut==='a_valider') statutPill = '<span class="status-pill muted">En attente ADV</span>';
       else statutPill = isClientVerified(c) ? '<span class="status-pill good">✓ Vérifié</span>' : '<span class="status-pill critical">⚠ Non vérifié</span>';
       return `<tr data-row="${c.id}" style="cursor:pointer;">
@@ -3568,7 +3617,7 @@ async function exportClientsQrPDF(clients, triggerBtn){
 function renderClientsCarte(content, user){
   const isCommercial = user.role==='commercial';
   let list = isCommercial ? [...myClients(user.id), ...myProspects(user.id), ...myAValider(user.id)]
-    : [...APP.clients.values()].filter(c=>c.statut==='actif'||c.statut==='prospect'||c.statut==='a_valider');
+    : visibleClients().filter(c=>c.statut==='actif'||c.statut==='prospect'||c.statut==='a_valider');
   content.innerHTML = `
     ${demoBannerHTML()}
     <div class="page-head"><div><h1>Carte clients</h1><p class="page-sub">${list.length} point${list.length>1?'s':''} de vente</p></div>
@@ -3603,7 +3652,7 @@ function renderClientsFrigo(content, user){
   // voit son propre portefeuille, les autres rôles (superviseur, ADV, direction) voient l'ensemble
   // des clients frigo de l'organisation, comme pour la Base de données clients et la Carte clients.
   const isCommercial = user.role==='commercial';
-  const list = (isCommercial ? [...APP.clients.values()].filter(c=>clientHasCommercial(c, user.id)) : [...APP.clients.values()])
+  const list = (isCommercial ? visibleClients().filter(c=>clientHasCommercial(c, user.id)) : visibleClients())
     .filter(c=>c.aFrigo && c.statut==='actif');
   const ym = todayDate().getFullYear()+'-'+pad2(todayDate().getMonth()+1);
   content.innerHTML = `
@@ -3670,7 +3719,7 @@ function renderComptesAValider(content, user){
   `;
   wireDemoBanner(content);
   function apply(){
-    const list = [...APP.clients.values()].filter(c=>c.statut==='a_valider')
+    const list = visibleClients().filter(c=>c.statut==='a_valider')
       .sort((a,b)=> (a.venteEnAttenteDate||'') < (b.venteEnAttenteDate||'') ? 1 : -1);
     const box = content.querySelector('#comptes-list');
     if(!list.length){ box.innerHTML = `<div class="empty-state">Aucun compte en attente de création pour l'instant.</div>`; return; }
@@ -3741,7 +3790,7 @@ function renderActiviteGenerale(content, user){
 
     const vendues = visites.filter(v=>v.statut==='vendu');
     const ca = vendues.reduce((s,v)=>s+v.montantTotal,0);
-    const clientsScope = secteur ? [...APP.clients.values()].filter(c=>c.secteur===secteur) : [...APP.clients.values()];
+    const clientsScope = secteur ? visibleClients().filter(c=>c.secteur===secteur) : visibleClients();
     const actifs = clientsScope.filter(c=>c.statut==='actif');
     const nonVerifies = actifs.filter(c=>!isClientVerified(c)).length;
     const enAttente = clientsScope.filter(c=>c.statut==='a_valider').length;

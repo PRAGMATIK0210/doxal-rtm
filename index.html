@@ -2121,24 +2121,47 @@ function projectGeo(lng, lat, bounds, w, h, pad){
   const offY = pad + (h-2*pad-spanY*scale)/2;
   return [offX + (lng-bounds.minLng)*cosLat*scale, offY + (bounds.maxLat-lat)*scale];
 }
-function drawSenegalMap(container, clients){
+function drawSenegalMap(container, clients, user){
   container.innerHTML = '';
   const W=320, H=300, PAD=12;
   const bounds = geoBoundsOf(SENEGAL_OUTLINE);
   const svg = svgEl('svg', {viewBox:`0 0 ${W} ${H}`, width:'100%', height:280, style:'display:block;'});
   const d = 'M' + SENEGAL_OUTLINE.map(([lng,lat])=>projectGeo(lng,lat,bounds,W,H,PAD).map(n=>n.toFixed(1)).join(',')).join(' L') + ' Z';
-  svg.appendChild(svgEl('path', {d, fill:'var(--accent-soft)', stroke:'var(--accent)', 'stroke-width':1.4, 'stroke-linejoin':'round'}));
-  const [dx,dy] = projectGeo(DAKAR_COORD.lng, DAKAR_COORD.lat, bounds, W, H, PAD);
-  svg.appendChild(svgEl('circle', {cx:dx,cy:dy,r:10, fill:'var(--accent)', opacity:0.22}));
-  svg.appendChild(svgEl('circle', {cx:dx,cy:dy,r:4, fill:'var(--accent)', stroke:'var(--surface)', 'stroke-width':1.5}));
-  const label = svgEl('text', {x:dx+8, y:dy-6, 'font-size':11, 'font-weight':700, fill:'var(--text-primary)'});
-  label.textContent = 'Dakar'; svg.appendChild(label);
+  svg.appendChild(svgEl('path', {d, fill:'var(--accent-soft)', stroke:'var(--accent)', 'stroke-width':1.2, 'stroke-linejoin':'round'}));
+  // Repère géographique (pas un client) pour s'orienter sur la carte.
+  const [ddx,ddy] = projectGeo(DAKAR_COORD.lng, DAKAR_COORD.lat, bounds, W, H, PAD);
+  svg.appendChild(svgEl('circle', {cx:ddx,cy:ddy,r:2, fill:'none', stroke:'var(--text-muted)', 'stroke-width':1}));
+  const dakarLabel = svgEl('text', {x:ddx+5, y:ddy-4, 'font-size':9, fill:'var(--text-muted)'});
+  dakarLabel.textContent = 'Dakar'; svg.appendChild(dakarLabel);
+  const tooltip = getTooltipEl();
+  let exactCount = 0;
+  clients.forEach(c=>{
+    if(c.lat==null || c.lng==null) return;
+    const [x,y] = projectGeo(c.lng, c.lat, bounds, W, H, PAD);
+    const isExact = !clientPositionIsFallback(c);
+    if(isExact) exactCount++;
+    const dot = svgEl('circle', {cx:x,cy:y, r: isExact?3.4:2.2,
+      fill: isExact ? clientPrimaryZoneColor(c.secteur) : 'none',
+      stroke: isExact ? 'var(--surface)' : 'var(--text-muted)', 'stroke-width':1,
+      opacity: isExact?0.95:0.55, style:'cursor:pointer;'});
+    dot.addEventListener('mousemove', e=>showTooltip(tooltip, e, `${c.nom} — ${c.zone||c.secteur||''}${isExact?'':' · position non confirmée sur le terrain'}`));
+    dot.addEventListener('mouseleave', ()=>hideTooltip(tooltip));
+    dot.addEventListener('click', ()=>openClientModal(c.id, user, false, true));
+    svg.appendChild(dot);
+  });
   container.appendChild(svg);
+  const secteurCount = new Set(clients.map(c=>c.secteur).filter(Boolean)).size;
   const cap = document.createElement('div');
   cap.style.cssText = 'font-size:11.5px;color:var(--text-secondary);margin-top:4px;';
-  cap.textContent = `Zone d'intervention : région de Dakar (Cap-Vert) — ${clients.length} point(s) de vente.`;
+  cap.textContent = `${clients.length} point${clients.length>1?'s':''} de vente sur ${secteurCount} secteur${secteurCount>1?'s':''}, à travers le Sénégal — ${exactCount} position${exactCount>1?'s':''} exacte${exactCount>1?'s':''} confirmée${exactCount>1?'s':''} sur le terrain.`;
   container.appendChild(cap);
+  const legend = document.createElement('div');
+  legend.style.cssText='display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;font-size:11px;color:var(--text-secondary);';
+  legend.innerHTML = `<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent);margin-right:4px;"></span>Position exacte confirmée (couleur = secteur)</span>
+    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;border:1.3px solid var(--text-muted);margin-right:4px;"></span>Point générique du secteur (non confirmée)</span>`;
+  container.appendChild(legend);
 }
+
 
 function drawZoneMap(container, clients, user){
   container.innerHTML = '';
@@ -3646,12 +3669,12 @@ function renderClientsCarte(content, user){
     </div>
   `;
   wireDemoBanner(content);
-  drawSenegalMap(content.querySelector('#senegal-map'), list);
   function apply(){
     const sec = content.querySelector('#filter-secteur').value;
     const s = content.querySelector('#filter-statut').value;
     const f = content.querySelector('#filter-frigo').value;
     let filtered = list.filter(c=> (!sec||c.secteur===sec) && (!s||c.statut===s) && (f===''|| (f==='1'?c.aFrigo:!c.aFrigo)) );
+    drawSenegalMap(content.querySelector('#senegal-map'), filtered, user);
     drawZoneMap(content.querySelector('#zone-map'), filtered, user);
   }
   content.querySelector('#filter-secteur').addEventListener('change', apply);

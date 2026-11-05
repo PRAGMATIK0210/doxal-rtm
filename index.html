@@ -794,6 +794,21 @@ function subscribeCollection(name, map, opts){
   });
   listeners.push(unsub);
 }
+let dataSyncStarted = false;
+function startDataSync(){
+  if(dataSyncStarted || !APP.db) return;
+  dataSyncStarted = true;
+  subscribeCollection('profils', APP.profils);
+  subscribeCollection('produits', APP.produits);
+  subscribeCollection('clients_rtm', APP.clients);
+  // Plus aucune limite sur ces trois collections : tout l'historique est chargé en mémoire
+  // (comme les clients) plutôt que seulement les 600/300/300 lignes les plus récentes, pour ne
+  // rien perdre à mesure que l'activité s'accumule sur le terrain.
+  subscribeCollection('visites', APP.visites, {orderBy:'date'});
+  subscribeCollection('fichesSuperviseur', APP.fiches, {orderBy:'date'});
+  subscribeCollection('relevesPrix', APP.relevesPrix, {orderBy:'date'});
+  flushOfflineQueue(); // rejoue tout de suite ce qui est resté en attente d'une session précédente
+}
 let renderScheduled = false;
 function scheduleRender(){
   if(renderScheduled) return;
@@ -924,16 +939,6 @@ async function boot(){
   APP.downloads = LocalDownloads;
   if(APP.db){
     APP.dbReady = true;
-    subscribeCollection('profils', APP.profils);
-    subscribeCollection('produits', APP.produits);
-    subscribeCollection('clients_rtm', APP.clients);
-    // Plus aucune limite sur ces trois collections : tout l'historique est chargé en mémoire
-    // (comme les clients) plutôt que seulement les 600/300/300 lignes les plus récentes, pour ne
-    // rien perdre à mesure que l'activité s'accumule sur le terrain.
-    subscribeCollection('visites', APP.visites, {orderBy:'date'});
-    subscribeCollection('fichesSuperviseur', APP.fiches, {orderBy:'date'});
-    subscribeCollection('relevesPrix', APP.relevesPrix, {orderBy:'date'});
-    flushOfflineQueue(); // rejoue tout de suite ce qui est resté en attente d'une session précédente
   }
   // Par sécurité, aucune session n'est conservée d'une ouverture à l'autre : à chaque lancement de
   // l'application (icône sur l'écran d'accueil ou nouvel onglet), l'identifiant et le mot de passe
@@ -1220,6 +1225,7 @@ function wireLogin(){
       }
       APP.currentUser = p;
       saveSession(p.id);
+      startDataSync();
       // Si la connexion a été déclenchée par un lien de QR code scanné avant d'être connecté,
       // on conserve cette route pour être redirigé directement vers le bon client après le login.
       const pendingQrRoute = (APP.route && APP.route.indexOf('#/qr/')===0) ? APP.route : null;

@@ -917,7 +917,7 @@ async function boot(){
     return;
   }
   try{
-    const sb = supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey);
+    const sb = supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
     APP.sb = sb;
     APP.db = makeSupabaseDbShim(sb);
   }catch(e){ APP.db = null; }
@@ -944,7 +944,7 @@ async function boot(){
   scheduleRender();
 }
 function saveSession(id){ /* Session volontairement non mémorisée : connexion requise à chaque ouverture. */ }
-function clearSession(){ try{ localStorage.removeItem('rtm_profile_id'); }catch(e){} APP.currentUser = null; }
+function clearSession(){ try{ localStorage.removeItem('rtm_profile_id'); }catch(e){} try{ APP.sb && APP.sb.auth.signOut(); }catch(e){} APP.currentUser = null; }
 
 /* ============================== DERIVED DATA ============================== */
 // Un client peut désormais être rattaché à PLUSIEURS commerciaux à la fois (ex : portefeuille
@@ -1187,9 +1187,16 @@ async function findProfilByCredentials(username, password){
   const u = (username||'').trim();
   const pw = (password||'').trim();
   if(!u || !pw) return null;
-  const { data, error } = await APP.sb.rpc('login_profil', { p_identifiant: u, p_password: pw });
+  const { data: email, error: resolveErr } = await APP.sb.rpc('resolve_login_email', { p_identifiant: u });
+  if(resolveErr) throw resolveErr;
+  if(!email) return null;
+  const { data: authData, error: authErr } = await APP.sb.auth.signInWithPassword({ email, password: pw });
+  if(authErr) return null;
+  const userId = authData && authData.user && authData.user.id;
+  if(!userId) return null;
+  const { data, error } = await APP.sb.from('profils').select('id, fields').eq('auth_user_id', userId).maybeSingle();
   if(error) throw error;
-  if(!data) return null;
+  if(!data){ try{ await APP.sb.auth.signOut(); }catch(e){} return null; }
   return Object.assign({id: data.id}, data.fields);
 }
 

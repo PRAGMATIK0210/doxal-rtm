@@ -1283,6 +1283,7 @@ function navFor(user){
       {r:'#/scan', l:'Scanner un client', i:'camera'},
       {r:'#/comptes', l:'Comptes à créer', i:'idcard'},
       {r:'#/activite', l:'Activité générale', i:'journal'},
+      {r:'#/prospection', l:'Suivi de la prospection', i:'userplus'},
       {r:'#/superviseurs', l:'Suivi des superviseurs', i:'clipboard'},
       {r:'#/equipe', l:'Vue équipe', i:'team'},
       {r:'#/dashboard', l:'Tableau de bord', i:'chart'},
@@ -1296,6 +1297,7 @@ function navFor(user){
       {r:'#/scan', l:'Scanner un client', i:'camera'},
       {r:'#/comptes', l:'Comptes à créer', i:'idcard'},
       {r:'#/activite', l:'Activité générale', i:'journal'},
+      {r:'#/prospection', l:'Suivi de la prospection', i:'userplus'},
       {r:'#/superviseurs', l:'Suivi des superviseurs', i:'clipboard'},
       {r:'#/equipe', l:'Vue équipe', i:'team'},
       {r:'#/dashboard', l:'Tableau de bord', i:'chart'},
@@ -1308,6 +1310,7 @@ function navFor(user){
     {r:'#/scan', l:'Scanner un client', i:'camera'},
     {r:'#/fiche', l:'Fiche de suivi', i:'clipboard'},
     {r:'#/journal', l:'Journal d\'activité', i:'journal'},
+    {r:'#/prospection', l:'Suivi de la prospection', i:'userplus'},
     {r:'#/pricing', l:'Pricing marché', i:'tag'},
     {r:'#/equipe', l:'Vue équipe', i:'team'},
     {r:'#/dashboard', l:'Tableau de bord', i:'chart'},
@@ -1320,7 +1323,7 @@ const PAGE_TITLES = {
   '#/tournee':'Ma tournée du jour', '#/historique':'Historique des tournées', '#/prospects':'Historique de prospection',
   '#/base-clients':'Base de données clients', '#/carte':'Carte clients', '#/frigo':'Clients avec frigo',
   '#/mes-stats':'Mes statistiques', '#/fiche':'Fiche de suivi superviseur', '#/journal':'Journal d\'activité superviseur', '#/pricing':'Pricing marché', '#/equipe':'Vue équipe',
-  '#/dashboard':'Tableau de bord', '#/comptes':'Comptes à créer', '#/activite':'Activité générale',
+  '#/dashboard':'Tableau de bord', '#/comptes':'Comptes à créer', '#/activite':'Activité générale', '#/prospection':'Suivi de la prospection',
   '#/superviseurs':'Suivi des superviseurs', '#/scan':'Scanner un client',
 };
 
@@ -1410,6 +1413,7 @@ function renderRoute(content, user, route){
   if(route==='#/dashboard') return renderDashboard(content, user, {scope:'all'});
   if(route==='#/comptes') return renderComptesAValider(content, user);
   if(route==='#/activite') return renderActiviteGenerale(content, user);
+  if(route==='#/prospection') return renderSuiviProspection(content, user);
   if(route==='#/superviseurs') return renderSuiviSuperviseurs(content, user);
   if(route==='#/scan') return renderScanClient(content, user);
   content.innerHTML = `<div class="empty-state">Page introuvable.</div>`;
@@ -4017,6 +4021,101 @@ function openSuperviseurHistoryModal(superviseurId, viewerUser){
     `;
   }
   applyRange(earliest, todayISO());
+}
+
+/* ============================== SUIVI DE LA PROSPECTION (DIRECTION / ADV / SUPERVISEUR) ============================== */
+function renderSuiviProspection(content, user){
+  const isOrgWide = user.role==='adv' || user.role==='direction';
+  const commerciaux = (isOrgWide
+    ? [...APP.profils.values()].filter(p=>p.role==='commercial')
+    : (user.equipe||[]).map(id=>APP.profils.get(id)).filter(Boolean)
+  ).sort((a,b)=> a.nom<b.nom?-1:1);
+  const equipeIds = new Set(commerciaux.map(c=>c.id));
+  const allProspects = visibleClients().filter(c=>
+    (c.statut==='prospect' || c.statut==='a_valider' || c.origineProspection) && clientCommerciaux(c).some(id=>equipeIds.has(id))
+  );
+  const allDates = allProspects.map(c=>c.dateCreation).filter(Boolean).sort();
+  const earliest = allDates[0] || periodCutoff(90);
+  content.innerHTML = `
+    ${demoBannerHTML()}
+    <div class="page-head"><div><h1>Suivi de la prospection</h1><p class="page-sub">De la prospection terrain à la conversion en client actif${isOrgWide?', tous commerciaux confondus':' pour votre équipe'}.</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <select id="sp-commercial"><option value="">${isOrgWide?'Tous les commerciaux':"Toute l'équipe"}</option>${commerciaux.map(c=>`<option value="${c.id}">${escapeHtml(c.nom)}</option>`).join('')}</select>
+        ${dateRangeHTML('sp', earliest, todayISO())}
+      </div>
+    </div>
+    <div class="kpi-grid" id="sp-kpis" style="margin-bottom:16px;"></div>
+    <div class="card" style="margin-bottom:16px;"><div class="card-title" style="margin-bottom:10px;">Par commercial</div><div class="table-wrap" id="sp-par-commercial"></div></div>
+    <div class="card"><div class="card-title" style="margin-bottom:10px;">Détail des prospects</div><div class="table-wrap" id="sp-table"></div></div>
+  `;
+  wireDemoBanner(content);
+  function apply(from, to){
+    from = from!==undefined ? from : (content.querySelector('#sp-from').value||earliest);
+    to = to!==undefined ? to : (content.querySelector('#sp-to').value||todayISO());
+    const comFiltre = content.querySelector('#sp-commercial').value;
+    const scoped = comFiltre ? allProspects.filter(c=>clientHasCommercial(c, comFiltre)) : allProspects;
+    const prospects = scoped.filter(c=> !c.dateCreation || (c.dateCreation>=from && c.dateCreation<=to));
+
+    const enAttente = prospects.filter(c=>c.statut==='prospect').length;
+    const enValidation = prospects.filter(c=>c.statut==='a_valider').length;
+    const convertis = prospects.filter(c=>c.statut==='actif').length;
+    const taux = prospects.length ? Math.round(convertis/prospects.length*100) : 0;
+    const caGenere = prospects.reduce((s,c)=> s + visitesForClient(c.id).filter(v=>v.statut==='vendu').reduce((s2,v)=>s2+v.montantTotal,0), 0);
+    content.querySelector('#sp-kpis').innerHTML = `
+      <div class="kpi-tile"><div class="kpi-label">Prospects reçus</div><div class="kpi-value">${prospects.length}</div></div>
+      <div class="kpi-tile"><div class="kpi-label">En attente de 1ère visite</div><div class="kpi-value">${enAttente}</div></div>
+      <div class="kpi-tile"><div class="kpi-label">En attente ADV</div><div class="kpi-value">${enValidation}</div></div>
+      <div class="kpi-tile"><div class="kpi-label">Convertis en clients actifs</div><div class="kpi-value">${convertis}</div></div>
+      <div class="kpi-tile"><div class="kpi-label">Taux de conversion</div><div class="kpi-value">${taux}%</div></div>
+      <div class="kpi-tile"><div class="kpi-label">CA généré depuis conversion</div><div class="kpi-value" style="font-size:17px;">${fmtNum(caGenere)}</div></div>
+    `;
+
+    const perBox = content.querySelector('#sp-par-commercial');
+    const perRows = commerciaux.map(com=>{
+      const mine = prospects.filter(c=>clientHasCommercial(c, com.id));
+      const att = mine.filter(c=>c.statut==='prospect').length;
+      const conv = mine.filter(c=>c.statut==='actif').length;
+      const t = mine.length ? Math.round(conv/mine.length*100) : 0;
+      const ca = mine.reduce((s,c)=> s + visitesForClient(c.id).filter(v=>v.statut==='vendu').reduce((s2,v)=>s2+v.montantTotal,0), 0);
+      return { com, count: mine.length, att, conv, t, ca };
+    }).filter(r=>r.count>0).sort((a,b)=> b.count-a.count);
+    perBox.innerHTML = perRows.length ? `<table><thead><tr><th>Commercial</th><th>Secteur</th><th>Prospects reçus</th><th>En attente</th><th>Convertis</th><th>Taux de conversion</th><th>CA généré</th></tr></thead><tbody>
+      ${perRows.map(r=>`<tr data-com="${r.com.id}" style="cursor:pointer;"><td><b>${escapeHtml(r.com.nom)}</b></td><td>${escapeHtml(r.com.secteur||'—')}</td>
+        <td class="num">${r.count}</td><td class="num">${r.att}</td><td class="num">${r.conv}</td>
+        <td><div style="display:flex;align-items:center;gap:8px;"><div class="progress" style="width:70px;"><div style="width:${r.t}%;background:${r.t>=50?'var(--good)':'var(--accent)'}"></div></div><span class="num" style="font-size:11.5px;">${r.t}%</span></div></td>
+        <td class="num">${fmtNum(r.ca)}</td></tr>`).join('')}
+    </tbody></table>` : `<div class="empty-state">Aucun prospect pour cette sélection.</div>`;
+    perBox.querySelectorAll('[data-com]').forEach(row=>row.addEventListener('click', ()=>{
+      content.querySelector('#sp-commercial').value = row.getAttribute('data-com');
+      apply();
+    }));
+
+    const box = content.querySelector('#sp-table');
+    if(!prospects.length){ box.innerHTML = `<div class="empty-state">Aucun prospect enregistré sur cette période.</div>`; return; }
+    const sorted = prospects.slice().sort((a,b)=> (a.dateCreation||'') < (b.dateCreation||'') ? 1 : -1);
+    box.innerHTML = `<table><thead><tr><th>Nom</th><th>Zone</th><th>Commercial</th><th>Origine</th><th>Reçu le</th><th>Statut</th><th>Visites</th><th>Dernière visite</th><th>CA généré</th></tr></thead><tbody>
+      ${sorted.map(c=>{
+        const visites = visitesForClient(c.id);
+        const vendues = visites.filter(v=>v.statut==='vendu');
+        const ca = vendues.reduce((s,v)=>s+v.montantTotal,0);
+        const derniere = visites.length ? fmtDateFR(visites[0].date) : 'jamais';
+        const origine = c.origineProspection==='superviseur'
+          ? `Transmis par ${escapeHtml((APP.profils.get(c.superviseurId)||{}).nom||'un superviseur')}`
+          : 'Prospection terrain';
+        const statut = c.statut==='actif'
+          ? `<span class="status-pill good">✓ Client actif${vendues.length?' depuis le '+fmtDateFR(vendues[vendues.length-1].date):''}</span>`
+          : (c.statut==='a_valider' ? `<span class="status-pill muted">En attente ADV</span>` : `<span class="status-pill warning">En attente de 1ère visite</span>`);
+        const comNoms = clientCommerciauxNoms(c);
+        return `<tr data-client="${c.id}"><td>${escapeHtml(c.nom)}</td><td>${escapeHtml(c.zone||c.secteur||'')}</td><td>${comNoms?escapeHtml(comNoms):'—'}</td><td class="helptext">${origine}</td>
+          <td>${c.dateCreation?fmtDateFR(c.dateCreation):'—'}</td><td>${statut}</td><td class="num">${visites.length}</td>
+          <td>${derniere}</td><td class="num">${fmtNum(ca)}</td></tr>`;
+      }).join('')}
+    </tbody></table>`;
+    box.querySelectorAll('tr[data-client]').forEach(row=>row.addEventListener('click', ()=>openClientModal(row.getAttribute('data-client'), user, false, true)));
+  }
+  content.querySelector('#sp-commercial').addEventListener('change', ()=>apply());
+  wireDateRange(content, 'sp', apply);
+  apply(earliest, todayISO());
 }
 
 /* ============================== NOUVELLES FONCTIONS (ADV / plages de dates / etc.) ============================== */

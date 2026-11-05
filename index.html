@@ -1721,7 +1721,7 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
       <button class="modal-close" data-close>${icon('x')}</button>
     </div>
 
-    ${scanMode ? '' : `<div class="card" style="padding:12px 14px;">
+    ${(scanMode || user.role!=='adv') ? '' : `<div class="card" style="padding:12px 14px;">
       <div class="card-head" style="margin-bottom:8px;">
         <div class="card-title">QR code du client</div>
         <button class="btn ghost sm" id="toggle-qr">${icon('camera')} Voir / Imprimer le QR code</button>
@@ -3482,6 +3482,7 @@ function renderTourneeProspecter(body, user){
 
 function renderClientsDB(content, user){
   const isCommercial = user.role==='commercial';
+  const isAdv = user.role==='adv';
   const canScanLookup = user.role==='adv' || user.role==='direction' || user.role==='superviseur';
   const allClients = isCommercial ? [...APP.clients.values()].filter(c=>clientHasCommercial(c, user.id)) : [...APP.clients.values()];
   let list = allClients.filter(c=>!c.archive);
@@ -3490,7 +3491,7 @@ function renderClientsDB(content, user){
     <div class="page-head"><div><h1>Base de données clients</h1><p class="page-sub">${list.length} point${list.length>1?'s':''} de vente${isCommercial?' dans votre portefeuille':''}</p></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         ${canScanLookup ? `<button class="btn primary" id="go-scan-lookup">${icon('camera')} Scanner un client</button>` : ''}
-        <button class="btn" id="clients-qr-pdf">${icon('camera')} Feuille de QR codes</button>
+        ${isAdv ? `<button class="btn" id="clients-qr-pdf">${icon('camera')} Feuille de QR codes</button>` : ''}
       </div>
     </div>
     <div class="card" style="padding:10px 14px;margin-bottom:14px;">
@@ -3505,9 +3506,9 @@ function renderClientsDB(content, user){
     </div>
     ${canScanLookup ? `<div class="banner" style="margin-bottom:14px;">${icon('camera')} Scannez le QR code collé chez un client pour ouvrir directement sa fiche : vous y verrez quel commercial est passé, les ventes effectuées et quel superviseur est passé, avec la date et l'heure de chaque passage.</div>` : ''}
     ${isCommercial ? `<div class="banner" style="margin-bottom:14px;">Complétez le secteur (auto), la zone, le téléphone, le nombre de visites et les jours de visite de chaque client : tant qu'une information manque, il apparaît « non vérifié » ci-dessous. Cliquez sur une ligne pour compléter.</div>` : ''}
-    <div class="banner" style="margin-bottom:14px;">${icon('camera')} Chaque client a son propre QR code à coller sur son point de vente : scanné avec l'appareil photo du téléphone, il ouvre directement sa fiche dans l'application. Cliquez sur une ligne puis sur « Voir / Imprimer le QR code », ou générez une feuille groupée pour tous les clients du filtre actuel.</div>
+    ${isAdv ? `<div class="banner" style="margin-bottom:14px;">${icon('camera')} Chaque client a son propre QR code à coller sur son point de vente : scanné avec l'appareil photo du téléphone, il ouvre directement sa fiche dans l'application. Cliquez sur une ligne puis sur « Voir / Imprimer le QR code », ou générez une feuille groupée pour tous les clients du filtre actuel.</div>` : ''}
     <div class="card"><div class="table-wrap"><table>
-      <thead><tr><th>Code</th><th>Client</th><th>Secteur</th><th>Zone</th><th>Téléphone</th><th>Jours visite</th><th>Commercial</th><th>Statut</th><th>QR</th></tr></thead>
+      <thead><tr><th>Code</th><th>Client</th><th>Secteur</th><th>Zone</th><th>Téléphone</th><th>Jours visite</th><th>Commercial</th><th>Statut</th>${isAdv ? '<th>QR</th>' : ''}</tr></thead>
       <tbody id="clients-tbody"></tbody>
     </table></div></div>
   `;
@@ -3552,8 +3553,8 @@ function renderClientsDB(content, user){
         <td>${(c.joursVisite&&c.joursVisite.length)?c.joursVisite.join(', '):'—'}</td>
         <td>${commercialNoms?escapeHtml(commercialNoms):'—'}</td>
         <td>${statutPill}</td>
-        <td><button class="btn ghost sm" data-qr="${c.id}" title="Voir / imprimer le QR code">${icon('camera')}</button></td></tr>`;
-    }).join('') || `<tr><td colspan="9" class="empty-state">Aucun client pour ce filtre.</td></tr>`;
+        ${isAdv ? `<td><button class="btn ghost sm" data-qr="${c.id}" title="Voir / imprimer le QR code">${icon('camera')}</button></td>` : ''}</tr>`;
+    }).join('') || `<tr><td colspan="${isAdv?9:8}" class="empty-state">Aucun client pour ce filtre.</td></tr>`;
     tb.querySelectorAll('[data-row]').forEach(r=>r.addEventListener('click', (e)=>{
       if(e.target.closest('[data-qr]')) return;
       openClientModal(r.getAttribute('data-row'), user);
@@ -3568,7 +3569,8 @@ function renderClientsDB(content, user){
   content.querySelector('#filter-search').addEventListener('input', apply);
   const comSel = content.querySelector('#filter-commercial');
   if(comSel) comSel.addEventListener('change', apply);
-  content.querySelector('#clients-qr-pdf').addEventListener('click', (e)=>{
+  const qrPdfBtn = content.querySelector('#clients-qr-pdf');
+  if(qrPdfBtn) qrPdfBtn.addEventListener('click', (e)=>{
     if(!currentFiltered.length){ toast('Aucun client à inclure dans la feuille (vérifiez les filtres).', 'warning'); return; }
     exportClientsQrPDF(currentFiltered, e.target.closest('button'));
   });

@@ -1708,7 +1708,7 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
   const canEditInfo = !c.archive && user.role==='commercial' && clientHasCommercial(c, user.id);
   const canRecordVisit = !c.archive && user.role==='commercial' && clientHasCommercial(c, user.id);
   const readOnlyViewer = user.role==='direction' || user.role==='adv';
-  const canManageCommerciaux = !c.archive && (user.role==='superviseur' || user.role==='adv' || user.role==='direction');
+  const canManageCommerciaux = !c.archive && user.role==='adv';
   let statutPillHtml = '';
   if(c.archive) statutPillHtml = '<span class="status-pill muted">Archivé</span>';
   else if(c.statut==='prospect') statutPillHtml = '<span class="status-pill warning">Prospect</span>';
@@ -1820,6 +1820,9 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
       </div>
     </div>` : `<div class="card" style="padding:12px 14px;border-color:var(--critical);">
       <div class="card-title" style="margin-bottom:8px;color:var(--critical);">Zone dangereuse</div>
+      ${c.statut==='prospect' ? `<div class="helptext" style="margin-bottom:10px;">Ce prospect fait doublon avec un client déjà existant dans la base ? Supprimez-le directement ci-dessous, sans passer par l'archivage — cette action est IRRÉVERSIBLE.</div>
+      <button class="btn danger sm" id="delete-prospect-btn" style="margin-bottom:12px;">${icon('trash')} Supprimer ce prospect (doublon)</button>
+      <div class="divider" style="margin-bottom:10px;"></div>` : ''}
       <div class="helptext" style="margin-bottom:10px;">Archivez ce client pour le retirer des listes de travail (portefeuilles, recherche, tableaux de bord) sans perdre son historique — réservé aux doublons ou erreurs de création. Un client archivé reste restaurable à tout moment.</div>
       <button class="btn sm" id="archive-client-btn">${icon('trash')} Archiver ce client</button>
     </div>`) : ''}
@@ -1962,6 +1965,19 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
     }catch(e){
       toast('Échec de l\'archivage.', 'critical');
       archiveClientBtn.disabled = false; archiveClientBtn.innerHTML = `${icon('trash')} Archiver ce client`;
+    }
+  });
+  const deleteProspectBtn = backdrop.querySelector('#delete-prospect-btn');
+  if(deleteProspectBtn) deleteProspectBtn.addEventListener('click', async ()=>{
+    if(!confirm(`Supprimer DÉFINITIVEMENT le prospect ${c.nom} ?\n\nÀ utiliser uniquement si ce prospect fait doublon avec un client déjà existant dans la base. Cette action est IRRÉVERSIBLE, contrairement à l'archivage : la fiche et son éventuel QR code seront perdus pour toujours.`)) return;
+    deleteProspectBtn.disabled = true; deleteProspectBtn.textContent = 'Suppression…';
+    try{
+      await dbDelete('clients_rtm', clientId, APP.clients, `Suppression doublon ${c.nom}`);
+      toast(`${c.nom} a été supprimé (doublon).`, 'good');
+      backdrop.remove();
+    }catch(e){
+      toast(e && e.message==='offline' ? 'Suppression impossible hors connexion — réessayez une fois connecté.' : 'Échec de la suppression.', 'critical');
+      deleteProspectBtn.disabled = false; deleteProspectBtn.innerHTML = `${icon('trash')} Supprimer ce prospect (doublon)`;
     }
   });
   const restoreClientBtn = backdrop.querySelector('#restore-client-btn');
@@ -3126,11 +3142,40 @@ function renderDashboardBody(box, f){
   const objPairs = baseClients.map(c=>({objectif:suggestObjective(c.id), realise:realizedForClientMonth(c.id, ym)}));
   const objAvg = objPairs.length ? Math.round(objPairs.reduce((s,p)=>s+Math.min(100,(p.realise/Math.max(p.objectif,1))*100),0)/objPairs.length) : 0;
 
+  // Panier moyen : CA moyen par vente conclue sur la période.
+  const panierMoyen = vendues.length ? ca/vendues.length : 0;
+
+  // Évolution du CA vs la période précédente de même durée (même filtre commercial/secteur).
+  const periodDays = Math.max(1, Math.round((new Date(f.toISO) - new Date(f.sinceISO))/86400000) + 1);
+  const prevToDate = new Date(f.sinceISO); prevToDate.setDate(prevToDate.getDate()-1);
+  const prevFromDate = new Date(prevToDate); prevFromDate.setDate(prevFromDate.getDate()-(periodDays-1));
+  const prevVisites = filteredVisites({commercialId:f.commercialId, secteur:f.secteur, sinceISO:isoDate(prevFromDate), toISO:isoDate(prevToDate)});
+  const prevCa = prevVisites.filter(v=>v.statut==='vendu').reduce((s,v)=>s+v.montantTotal,0);
+  const caDeltaPct = prevCa>0 ? Math.round((ca-prevCa)/prevCa*100) : (ca>0 ? 100 : 0);
+
+  // Clients actifs du périmètre sans aucun passage depuis 30 jours (risque de décrochage).
+  const inactifs = baseClients.filter(c=>{ const lv = lastVisitDate(c.id); return !lv || lv < periodCutoff(30); }).length;
+
+  // Conversion prospects → clients actifs, parmi les prospects créés sur la période filtrée.
+  function dansPerimetre(c){
+    if(f.commercialId && !clientHasCommercial(c, f.commercialId)) return false;
+    if(f.secteur && c.secteur!==f.secteur) return false;
+    return true;
+  }
+  const prospectsPeriode = visibleClients().filter(c=> dansPerimetre(c) && (c.statut==='prospect' || c.statut==='a_valider' || c.origineProspection)
+    && c.dateCreation>=f.sinceISO && (!f.toISO || c.dateCreation<=f.toISO));
+  const prospectsConvertis = prospectsPeriode.filter(c=>c.statut==='actif').length;
+  const tauxConversionProspects = prospectsPeriode.length ? Math.round(prospectsConvertis/prospectsPeriode.length*100) : 0;
+
   box.innerHTML = `
     <div class="kpi-grid">
       <div class="kpi-tile"><div class="kpi-label">Chiffre d'affaires</div><div class="kpi-value">${fmtNum(ca)}</div><div class="kpi-sub">FCFA sur la période</div></div>
+      <div class="kpi-tile"><div class="kpi-label">Évolution du CA</div><div class="kpi-value" style="color:${caDeltaPct>=0?'var(--good)':'var(--critical)'};">${caDeltaPct>=0?'+':''}${caDeltaPct}%</div><div class="kpi-sub">vs période précédente (${fmtNum(prevCa)} FCFA)</div></div>
+      <div class="kpi-tile"><div class="kpi-label">Panier moyen</div><div class="kpi-value">${fmtNum(panierMoyen)}</div><div class="kpi-sub">FCFA par vente conclue</div></div>
       <div class="kpi-tile"><div class="kpi-label">Taux de visite (jour)</div><div class="kpi-value">${tauxVisite}%</div><div class="kpi-sub">${visitedToday.length}/${plannedToday.length} planifiés</div></div>
       <div class="kpi-tile"><div class="kpi-label">Taux de transformation</div><div class="kpi-value">${tauxTransfo}%</div><div class="kpi-sub">${vendues.length}/${visites.length} passages</div></div>
+      <div class="kpi-tile"><div class="kpi-label">Clients inactifs</div><div class="kpi-value">${inactifs}</div><div class="kpi-sub">actifs sans passage depuis 30j</div></div>
+      <div class="kpi-tile"><div class="kpi-label">Conversion prospects</div><div class="kpi-value">${tauxConversionProspects}%</div><div class="kpi-sub">${prospectsConvertis}/${prospectsPeriode.length} devenus clients actifs</div></div>
       <div class="kpi-tile"><div class="kpi-label">Nouveaux clients</div><div class="kpi-value">${nouveaux}</div><div class="kpi-sub">sur la période</div></div>
       <div class="kpi-tile"><div class="kpi-label">Clients avec frigo</div><div class="kpi-value">${withFrigo}%</div><div class="kpi-sub">${baseClients.filter(c=>c.aFrigo).length}/${baseClients.length}</div></div>
       <div class="kpi-tile"><div class="kpi-label">Objectif atteint (moy.)</div><div class="kpi-value">${objAvg}%</div><div class="kpi-sub">mois en cours</div></div>

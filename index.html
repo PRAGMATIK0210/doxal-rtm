@@ -1820,8 +1820,8 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
       </div>
     </div>` : `<div class="card" style="padding:12px 14px;border-color:var(--critical);">
       <div class="card-title" style="margin-bottom:8px;color:var(--critical);">Zone dangereuse</div>
-      ${c.statut==='prospect' ? `<div class="helptext" style="margin-bottom:10px;">Ce prospect fait doublon avec un client déjà existant dans la base ? Supprimez-le directement ci-dessous, sans passer par l'archivage — cette action est IRRÉVERSIBLE.</div>
-      <button class="btn danger sm" id="delete-prospect-btn" style="margin-bottom:12px;">${icon('trash')} Supprimer ce prospect (doublon)</button>
+      ${(c.statut==='prospect' || c.statut==='actif') ? `<div class="helptext" style="margin-bottom:10px;">Ce ${c.statut==='actif'?'compte':'prospect'} fait doublon avec un client déjà existant dans la base${c.statut==='actif'?' (même après la création du compte)':''} ? Supprimez-le directement ci-dessous, sans passer par l'archivage — cette action est IRRÉVERSIBLE.</div>
+      <button class="btn danger sm" id="delete-prospect-btn" style="margin-bottom:12px;">${icon('trash')} Supprimer ${c.statut==='actif'?'ce compte':'ce prospect'} (doublon)</button>
       <div class="divider" style="margin-bottom:10px;"></div>` : ''}
       <div class="helptext" style="margin-bottom:10px;">Archivez ce client pour le retirer des listes de travail (portefeuilles, recherche, tableaux de bord) sans perdre son historique — réservé aux doublons ou erreurs de création. Un client archivé reste restaurable à tout moment.</div>
       <button class="btn sm" id="archive-client-btn">${icon('trash')} Archiver ce client</button>
@@ -1969,7 +1969,8 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
   });
   const deleteProspectBtn = backdrop.querySelector('#delete-prospect-btn');
   if(deleteProspectBtn) deleteProspectBtn.addEventListener('click', async ()=>{
-    if(!confirm(`Supprimer DÉFINITIVEMENT le prospect ${c.nom} ?\n\nÀ utiliser uniquement si ce prospect fait doublon avec un client déjà existant dans la base. Cette action est IRRÉVERSIBLE, contrairement à l'archivage : la fiche et son éventuel QR code seront perdus pour toujours.`)) return;
+    const dupMot = c.statut==='actif' ? 'compte' : 'prospect';
+    if(!confirm(`Supprimer DÉFINITIVEMENT ce ${dupMot}, ${c.nom} ?\n\nÀ utiliser uniquement si ce ${dupMot} fait doublon avec un client déjà existant dans la base. Cette action est IRRÉVERSIBLE, contrairement à l'archivage : la fiche et son éventuel QR code seront perdus pour toujours.`)) return;
     deleteProspectBtn.disabled = true; deleteProspectBtn.textContent = 'Suppression…';
     try{
       await dbDelete('clients_rtm', clientId, APP.clients, `Suppression doublon ${c.nom}`);
@@ -1977,7 +1978,7 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
       backdrop.remove();
     }catch(e){
       toast(e && e.message==='offline' ? 'Suppression impossible hors connexion — réessayez une fois connecté.' : 'Échec de la suppression.', 'critical');
-      deleteProspectBtn.disabled = false; deleteProspectBtn.innerHTML = `${icon('trash')} Supprimer ce prospect (doublon)`;
+      deleteProspectBtn.disabled = false; deleteProspectBtn.innerHTML = `${icon('trash')} Supprimer ${dupMot==='compte'?'ce compte':'ce prospect'} (doublon)`;
     }
   });
   const restoreClientBtn = backdrop.querySelector('#restore-client-btn');

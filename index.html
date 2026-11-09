@@ -1076,6 +1076,7 @@ function visiteMontantCell(v){
 function facturesDetailRowHTML(v, colspan){
   if(!v.factures || !v.factures.length) return '';
   return `<tr class="facture-detail-row" data-facture-detail="${v.id}" style="display:none;"><td colspan="${colspan}">
+    ${v.commercialErpNom ? `<div class="helptext" style="margin-bottom:6px;">Vente enregistrée dans l'ERP sous le centre de coût : <b>${escapeHtml(v.commercialErpNom)}</b></div>` : ''}
     <div class="table-wrap"><table><thead><tr><th>Facture</th><th>Produit</th><th>Quantité</th><th>Unité</th><th>Prix unitaire</th><th>Valeur</th></tr></thead><tbody>
       ${v.factures.map(f=>f.lignes.map((l,i)=>`<tr><td>${i===0?escapeHtml(f.numero):''}</td><td>${escapeHtml(l.produit)}</td><td class="num">${fmtNum(l.quantite)}</td><td>${escapeHtml(l.unite||'')}</td><td class="num">${fmtFCFA(l.prixUnitaire)}</td><td class="num">${fmtFCFA(l.valeur)}</td></tr>`).join('')).join('')}
     </tbody></table></div>
@@ -1521,7 +1522,7 @@ function renderImportVentes(content, user){
       <div><h1>Importer les ventes</h1>
         <p class="page-sub">Importez le fichier Excel des mouvements de ventes de l'ERP pour rattacher automatiquement chaque facture au passage du jour, sans ressaisie manuelle.</p></div>
     </div>
-    <div class="banner" style="margin-bottom:14px;">Rapprochement par date exacte et code client. Une vente sans passage terrain ce jour-là est quand même enregistrée (marquée « sans passage »). Un passage qui ne reçoit aucune facture après l'import devient automatiquement « Non vendu ». Réimporter un fichier (ou un fichier dont la période chevauche un import précédent) ne crée pas de doublon.</div>
+    <div class="banner" style="margin-bottom:14px;">Rapprochement par date exacte, code client et commercial (identifié via la colonne « centre de coût » de l'ERP — pas seulement le commercial habituel du client, car plusieurs commerciaux peuvent se partager un même client). Une vente sans passage terrain ce jour-là est quand même enregistrée (marquée « sans passage »). Un passage qui ne reçoit aucune facture après l'import devient automatiquement « Non vendu ». Réimporter un fichier (ou un fichier dont la période chevauche un import précédent) ne crée pas de doublon.</div>
     <div class="card" style="max-width:640px;">
       <div class="card-title" style="margin-bottom:8px;">Fichier Excel ERP (mouvements de ventes)</div>
       <input type="file" id="erp-file-input" accept=".xlsx,.xls">
@@ -1551,7 +1552,7 @@ function renderImportVentes(content, user){
     analyzeBtn.disabled = false; analyzeBtn.innerHTML = `${icon('download')} Analyser le fichier`;
   });
   function renderErpPreview(){
-    const { groupes, dates, clientsIntrouvables } = analyse;
+    const { groupes, dates, clientsIntrouvables, commerciauxNonReconnus } = analyse;
     resultBox.innerHTML = `
       <div class="card" style="padding:12px 14px;border-color:var(--accent);">
         <div class="card-title" style="margin-bottom:8px;">Aperçu avant import</div>
@@ -1561,6 +1562,7 @@ function renderImportVentes(content, user){
           <div><span class="helptext">Clients introuvables (code inconnu)</span><br><b style="${clientsIntrouvables.length?'color:var(--critical);':''}">${clientsIntrouvables.length}</b></div>
         </div>
         ${clientsIntrouvables.length ? `<div class="helptext" style="margin-bottom:10px;">Codes non reconnus dans la base (vérifiez qu'ils correspondent bien à des comptes créés) : ${clientsIntrouvables.map(escapeHtml).join(', ')}</div>` : ''}
+        ${commerciauxNonReconnus.length ? `<div class="helptext" style="margin-bottom:10px;">Nom de centre de coût non reconnu comme commercial (vente enregistrée sans commercial attribué, à vérifier manuellement) : ${commerciauxNonReconnus.map(escapeHtml).join(', ')}</div>` : ''}
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <button class="btn primary" id="erp-confirm-btn">${icon('check')} Confirmer l'import</button>
           <button class="btn ghost" id="erp-cancel-btn">Annuler</button>
@@ -1600,10 +1602,34 @@ function renderImportVentes(content, user){
   }
 }
 
+// Normalise un nom de personne pour comparaison (accents, casse, ponctuation, espaces multiples).
+function normalizeNomPersonne(s){
+  return (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z\s]/g,' ').replace(/\s+/g,' ').trim();
+}
+// Retrouve le commercial correspondant à une valeur de la colonne "Nom du centre de coût" de
+// l'ERP. On ne devine jamais en cas d'ambiguïté : mieux vaut laisser la vente non attribuée à un
+// commercial (null) qu'attribuer une vente au mauvais commercial — c'est précisément l'erreur que
+// cette fonction remplace (l'ancien comportement attribuait par défaut au commercial habituel du
+// client, ce qui est faux quand plusieurs commerciaux se partagent un même client).
+function resolveCommercialFromCentreCout(nomBrut){
+  const norm = normalizeNomPersonne(nomBrut);
+  if(!norm) return null;
+  const commerciaux = [...APP.profils.values()].filter(p=>p.role==='commercial');
+  const exact = commerciaux.find(p=>normalizeNomPersonne(p.nom)===norm);
+  if(exact) return exact.id;
+  const candidats = commerciaux.filter(p=>{
+    const pn = normalizeNomPersonne(p.nom);
+    return pn && (norm.includes(pn) || pn.includes(norm));
+  });
+  return candidats.length===1 ? candidats[0].id : null;
+}
 // Lit le fichier Excel ERP, regroupe les lignes par (facture, code client) puis par (code client,
-// date) — un même client peut avoir plusieurs factures le même jour, elles sont additionnées —
-// et retrouve le client correspondant dans la base pour chaque groupe. Ne modifie rien en base :
-// sert uniquement à préparer l'aperçu affiché avant confirmation.
+// date, commercial) — un même client peut avoir plusieurs factures le même jour pour un même
+// commercial, elles sont additionnées, mais si plusieurs commerciaux différents ont vendu au même
+// client le même jour (un client peut être partagé entre plusieurs commerciaux), chacun forme un
+// groupe distinct : le commercial vendeur est identifié via la colonne "Nom du centre de coût" de
+// l'ERP, jamais via le commercial habituellement assigné au client. Ne modifie rien en base : sert
+// uniquement à préparer l'aperçu affiché avant confirmation.
 async function analyzeErpFile(file){
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, {type:'array', cellDates:true});
@@ -1622,8 +1648,9 @@ async function analyzeErpFile(file){
     const dateIso = excelDateToISO(r['Date']);
     if(!dateIso) continue;
     const key = numero+'|'+code;
-    if(!facturesMap.has(key)) facturesMap.set(key, { numero, code, date: dateIso, nomClient: r['Nom du client']||'', lignes: [], total: 0 });
+    if(!facturesMap.has(key)) facturesMap.set(key, { numero, code, date: dateIso, nomClient: r['Nom du client']||'', centreCout: (r['Nom du centre de coût']||'').toString().trim(), lignes: [], total: 0 });
     const f = facturesMap.get(key);
+    if(!f.centreCout && r['Nom du centre de coût']) f.centreCout = r['Nom du centre de coût'].toString().trim();
     const qte = Number(r['Quantité'])||0;
     const prix = Number(r['Prix'])||0;
     const valeurBrute = Number(r['Valeur']);
@@ -1633,42 +1660,55 @@ async function analyzeErpFile(file){
   }
   const factures = [...facturesMap.values()];
   if(!factures.length) throw new Error('Aucune ligne exploitable trouvée dans ce fichier.');
-  const parClientDate = new Map();
+  const parGroupe = new Map();
   for(const f of factures){
-    const key = f.code+'|'+f.date;
-    if(!parClientDate.has(key)) parClientDate.set(key, { code: f.code, date: f.date, nomClient: f.nomClient, factures: [] });
-    parClientDate.get(key).factures.push(f);
+    const commercialId = resolveCommercialFromCentreCout(f.centreCout);
+    const discriminant = commercialId || ('NOM:'+normalizeNomPersonne(f.centreCout));
+    const key = f.code+'|'+f.date+'|'+discriminant;
+    if(!parGroupe.has(key)) parGroupe.set(key, { code: f.code, date: f.date, nomClient: f.nomClient, commercialId, centreCoutNom: f.centreCout||null, factures: [] });
+    parGroupe.get(key).factures.push(f);
   }
   const clientsIntrouvables = new Set();
+  const commerciauxNonReconnus = new Set();
   const groupes = [];
-  for(const g of parClientDate.values()){
+  for(const g of parGroupe.values()){
     const client = [...APP.clients.values()].find(c=>c.code && c.code===g.code);
     if(!client){ clientsIntrouvables.add(g.code + (g.nomClient?(' — '+g.nomClient):'')); continue; }
-    groupes.push({ clientId: client.id, clientNom: client.nom, date: g.date, factures: g.factures, total: g.factures.reduce((s,f)=>s+f.total,0) });
+    if(!g.commercialId && g.centreCoutNom) commerciauxNonReconnus.add(g.centreCoutNom);
+    groupes.push({ clientId: client.id, clientNom: client.nom, date: g.date, factures: g.factures, total: g.factures.reduce((s,f)=>s+f.total,0), commercialId: g.commercialId, centreCoutNom: g.centreCoutNom });
   }
   const dates = [...new Set(factures.map(f=>f.date))].sort();
-  return { groupes, dates, minDate: dates[0], maxDate: dates[dates.length-1], clientsIntrouvables: [...clientsIntrouvables] };
+  return { groupes, dates, minDate: dates[0], maxDate: dates[dates.length-1], clientsIntrouvables: [...clientsIntrouvables], commerciauxNonReconnus: [...commerciauxNonReconnus] };
 }
 
-// Applique un groupe (un client, une date, une ou plusieurs factures) : rattache au passage déjà
-// enregistré ce jour-là s'il existe (en priorité celui en attente d'import), sinon crée une vente
-// "sans passage terrain". Idempotent : réappliquer le même groupe remplace simplement les mêmes
-// factures (par numéro) sans dupliquer.
+// Applique un groupe (un client, une date, un commercial identifié via le centre de coût, une ou
+// plusieurs factures) : rattache au passage déjà enregistré ce jour-là pour CE commercial s'il
+// existe (en priorité celui en attente d'import), sinon crée une vente "sans passage terrain"
+// attribuée à ce commercial. Si le commercial n'a pas pu être identifié (nom de centre de coût
+// absent ou non reconnu), on ne rattache que s'il n'y a aucune ambiguïté possible (un seul passage
+// ce jour-là pour ce client) — jamais au passage d'un autre commercial qui aurait aussi vendu au
+// même client le même jour. Le nom brut du centre de coût est toujours conservé pour traçabilité,
+// même quand il n'a pas pu être résolu en commercial connu. Idempotent : réappliquer le même
+// groupe remplace simplement les mêmes factures (par numéro) sans dupliquer.
 async function applyErpGroupe(g){
   const facturesPayload = g.factures.map(f=>({ numero: f.numero, lignes: f.lignes, total: f.total }));
   const visitesJour = [...APP.visites.values()].filter(v=>v.clientId===g.clientId && v.date===g.date);
-  const visite = visitesJour.find(v=>v.statut==='en_attente_import') || visitesJour[0] || null;
+  let visite = null;
+  if(g.commercialId){
+    visite = visitesJour.find(v=>v.commercialId===g.commercialId && v.statut==='en_attente_import') || visitesJour.find(v=>v.commercialId===g.commercialId) || null;
+  }else if(visitesJour.length===1){
+    visite = visitesJour[0];
+  }
   if(visite){
     await dbUpdate('visites', visite.id, {
-      statut: 'vendu', montantTotal: g.total, factures: facturesPayload, raisonNonAchat: null,
+      statut: 'vendu', montantTotal: g.total, factures: facturesPayload, raisonNonAchat: null, commercialErpNom: g.centreCoutNom||null,
     }, APP.visites, `Import ventes ${g.clientNom}`);
     return 'rattachee';
   }
-  const client = APP.clients.get(g.clientId);
   await dbCreate('visites', {
-    clientId: g.clientId, commercialId: (clientCommerciaux(client)[0]||null), date: g.date,
+    clientId: g.clientId, commercialId: g.commercialId||null, date: g.date,
     timestamp: new Date().toISOString(), gps: null, concurrence: '', statut: 'vendu',
-    produitsVendus: [], montantTotal: g.total, raisonNonAchat: null, factures: facturesPayload, sansPassage: true,
+    produitsVendus: [], montantTotal: g.total, raisonNonAchat: null, factures: facturesPayload, sansPassage: true, commercialErpNom: g.centreCoutNom||null,
   }, APP.visites, `Vente sans passage ${g.clientNom}`);
   return 'sans_passage';
 }

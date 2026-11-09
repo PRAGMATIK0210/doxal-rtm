@@ -670,7 +670,8 @@ const RAISONS_NON_ACHAT = [
 ];
 const JOURS_FR = ["Dimanche","Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi"];
 /* Liste de concurrents à adapter à votre marché — modifiable ici pour alimenter la liste déroulante
-   du commercial et du superviseur lors de l'identification de la concurrence en boutique. */
+   du superviseur lors de l'identification de la concurrence en boutique (le commercial n'a pas à
+   identifier de concurrent : on garde son travail simple, ce relevé relève du superviseur). */
 const CONCURRENTS = ["DOLIMA","JABOOT","SARBI","ARDO","YELITARE","SIM","NINO","DELICE","KALISE","WELY","DJELI","NAFY","FATOU","Autre"];
 /* Catégories de produits DOXAL — utilisées pour cocher les produits vendus lors d'un passage
    commercial (« Vendu ») et les produits présents en rayon relevés par le superviseur. Liste fixe
@@ -2319,7 +2320,6 @@ function renderVisitForm(box, c, user, existing, backdrop){
   let vendu = true;
   let produitsChoisis = new Set();
   let montantSaisi = '';
-  let concurrentChoisi = '';
   function renderInner(){
     box.innerHTML = `
       <div class="chip-select" style="margin-bottom:10px;">
@@ -2328,12 +2328,6 @@ function renderVisitForm(box, c, user, existing, backdrop){
       </div>
       <div id="lines-box"></div>
       <div id="raison-box"></div>
-      <label class="field" style="margin:10px 0;">Concurrent identifié en boutique (facultatif)
-        <select id="concurrent-select">
-          <option value="">Aucun concurrent identifié</option>
-          ${CONCURRENTS.map(nom=>`<option value="${escapeHtml(nom)}" ${concurrentChoisi===nom?'selected':''}>${escapeHtml(nom)}</option>`).join('')}
-        </select>
-      </label>
       <div class="gps-box" id="gps-box" style="margin:10px 0;">
         ${gps ? `<b>${gps.distanceM<=300?'✓ Position confirmée':'⚠ Visite à distance'}</b> · ${gps.distanceM} m du client enregistré${gps.distanceM>300?' — ce passage sera signalé comme « à distance » à l\'ADV et à la direction.':''}`
               : `Localisation en cours pour confirmer la visite…`}
@@ -2342,7 +2336,6 @@ function renderVisitForm(box, c, user, existing, backdrop){
       <button class="btn primary" id="submit-visit" style="width:100%;justify-content:center;">Enregistrer le passage</button>
     `;
     box.querySelectorAll('[data-v]').forEach(b=>b.addEventListener('click', ()=>{ vendu = b.getAttribute('data-v')==='1'; renderInner(); }));
-    box.querySelector('#concurrent-select').addEventListener('change', e=>{ concurrentChoisi = e.target.value; });
     box.querySelector('#gps-btn').addEventListener('click', ()=>{
       const btn = box.querySelector('#gps-btn'); btn.disabled = true; btn.textContent='Localisation…';
       getPositionWithFallback(pos=>{
@@ -2386,7 +2379,7 @@ function renderVisitForm(box, c, user, existing, backdrop){
     const btn = box.querySelector('#submit-visit'); btn.disabled = true; btn.textContent = 'Enregistrement…';
     let payload = {
       clientId: c.id, commercialId: user.id, date: todayISO(), timestamp: new Date().toISOString(),
-      gps: gps || null, concurrence: concurrentChoisi || '',
+      gps: gps || null, concurrence: '',
     };
     if(vendu){
       if(!produitsChoisis.size){ toast('Sélectionnez au moins une catégorie de produit vendue.', 'warning'); btn.disabled=false; btn.textContent='Enregistrer le passage'; return; }
@@ -2421,20 +2414,14 @@ function renderVisitForm(box, c, user, existing, backdrop){
 // Formulaire de passage simplifié pour un client déjà actif (code ERP existant) : plus de choix
 // Vendu/Non vendu, plus de catégories de produits, plus de montant à saisir à la main — tout sera
 // déduit automatiquement ce soir par l'import des ventes ERP (rapprochement par date + code
-// client). Seuls restent la vérification de position (identique à l'ancien formulaire) et le
-// repérage facultatif d'un concurrent en boutique.
+// client). Seule reste la vérification de position (identique à l'ancien formulaire) : on ne
+// demande plus au commercial d'identifier la concurrence en boutique, ce relevé relevant du
+// superviseur et non du commercial — on garde son travail simple.
 function renderVisitFormSimplifie(box, c, user, backdrop){
   let gps = null;
-  let concurrentChoisi = '';
   function renderInner(){
     box.innerHTML = `
       <div class="helptext" style="margin-bottom:10px;">Ce client a déjà un compte actif : il suffit d'enregistrer votre passage. Les ventes du jour seront automatiquement rattachées ce soir, après l'import des factures par l'ADV — plus besoin de ressaisir le montant ou les produits.</div>
-      <label class="field" style="margin:10px 0;">Concurrent identifié en boutique (facultatif)
-        <select id="concurrent-select">
-          <option value="">Aucun concurrent identifié</option>
-          ${CONCURRENTS.map(nom=>`<option value="${escapeHtml(nom)}" ${concurrentChoisi===nom?'selected':''}>${escapeHtml(nom)}</option>`).join('')}
-        </select>
-      </label>
       <div class="gps-box" id="gps-box" style="margin:10px 0;">
         ${gps ? `<b>${gps.distanceM<=300?'✓ Position confirmée':'⚠ Visite à distance'}</b> · ${gps.distanceM} m du client enregistré${gps.distanceM>300?' — ce passage sera signalé comme « à distance » à l\'ADV et à la direction.':''}`
               : `Localisation en cours pour confirmer la visite…`}
@@ -2442,7 +2429,6 @@ function renderVisitFormSimplifie(box, c, user, backdrop){
       </div>
       <button class="btn primary" id="submit-visit" style="width:100%;justify-content:center;">Enregistrer le passage</button>
     `;
-    box.querySelector('#concurrent-select').addEventListener('change', e=>{ concurrentChoisi = e.target.value; });
     box.querySelector('#gps-btn').addEventListener('click', ()=>{
       const btn = box.querySelector('#gps-btn'); btn.disabled = true; btn.textContent='Localisation…';
       getPositionWithFallback(pos=>{
@@ -2461,7 +2447,7 @@ function renderVisitFormSimplifie(box, c, user, backdrop){
     const btn = box.querySelector('#submit-visit'); btn.disabled = true; btn.textContent = 'Enregistrement…';
     const payload = {
       clientId: c.id, commercialId: user.id, date: todayISO(), timestamp: new Date().toISOString(),
-      gps: gps || null, concurrence: concurrentChoisi || '',
+      gps: gps || null, concurrence: '',
       statut: 'en_attente_import', produitsVendus: [], montantTotal: 0, raisonNonAchat: null,
       factures: [], sansPassage: false,
     };

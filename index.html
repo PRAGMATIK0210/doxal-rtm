@@ -707,6 +707,21 @@ function todayDate(){ return new Date(); }
 function isoDate(d){ return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
 function todayISO(){ return isoDate(todayDate()); }
 function todayWeekdayFR(){ return JOURS_FR[todayDate().getDay()]; }
+// Convertit une cellule date d'un fichier Excel importé (objet Date si XLSX.read a été appelé
+// avec {cellDates:true}, ou nombre de série Excel en secours) vers notre format ISO "aaaa-mm-jj",
+// en utilisant les composantes UTC pour rester indépendant du fuseau horaire du navigateur.
+function excelDateToISO(d){
+  if(!d) return null;
+  let date = d;
+  if(typeof d === 'number'){
+    const utcDays = Math.floor(d - 25569);
+    date = new Date(utcDays*86400*1000);
+  } else if(typeof d === 'string'){
+    date = new Date(d);
+  }
+  if(!(date instanceof Date) || isNaN(date.getTime())) return null;
+  return date.getUTCFullYear()+'-'+pad2(date.getUTCMonth()+1)+'-'+pad2(date.getUTCDate());
+}
 function monthKey(iso){ return iso ? iso.slice(0,7) : ''; }
 function fmtDateFR(iso){ if(!iso) return '—'; const [y,m,d]=iso.split('-'); return `${d}/${m}/${y}`; }
 function fmtDateTimeFR(iso){
@@ -1028,6 +1043,44 @@ function visiteToday(clientId, commercialId){
   const t = todayISO();
   return [...APP.visites.values()].find(v=>v.clientId===clientId && v.commercialId===commercialId && v.date===t) || null;
 }
+// Statut d'un passage commercial : 'vendu' (facture rattachée — via import ERP pour un client
+// actif, ou saisie manuelle pour la toute première vente d'un prospect), 'non_vendu' (aucune
+// facture trouvée pour ce client à l'import du jour, ou raison manuelle pour un prospect), ou
+// 'en_attente_import' (passage enregistré sur un client déjà actif, en attente de l'import du
+// jour par l'ADV — ni vendu ni non vendu tant que l'import n'a pas eu lieu). Ces quatre fonctions
+// centralisent l'affichage de ce statut pour éviter de dupliquer le ternaire vendu/non-vendu à
+// chaque endroit où un passage est affiché.
+function visiteStatutLabel(v){
+  if(v.statut==='vendu') return 'Vendu';
+  if(v.statut==='non_vendu') return 'Non vendu';
+  return "En attente d'import";
+}
+function visiteStatutPillHTML(v, withMontant){
+  if(v.statut==='vendu') return `<span class="status-pill good">Vendu${withMontant?' · '+fmtFCFA(v.montantTotal):''}</span>`;
+  if(v.statut==='non_vendu') return `<span class="status-pill critical">Non vendu</span>`;
+  return `<span class="status-pill muted">En attente d'import</span>`;
+}
+function visiteStatutColor(v){
+  if(v.statut==='vendu') return 'var(--good)';
+  if(v.statut==='non_vendu') return 'var(--critical)';
+  return 'var(--text-muted)';
+}
+function visiteMontantCell(v){
+  if(v.statut==='vendu') return fmtFCFA(v.montantTotal);
+  if(v.statut==='non_vendu') return v.raisonNonAchat||'—';
+  return '—';
+}
+// Ligne de tableau dépliable (masquée par défaut) listant le détail produit par produit de
+// chaque facture rattachée à un passage — numéro de facture, produit, quantité, unité, prix
+// unitaire et valeur. Alimentée par l'import des ventes ERP (voir renderImportVentes).
+function facturesDetailRowHTML(v, colspan){
+  if(!v.factures || !v.factures.length) return '';
+  return `<tr class="facture-detail-row" data-facture-detail="${v.id}" style="display:none;"><td colspan="${colspan}">
+    <div class="table-wrap"><table><thead><tr><th>Facture</th><th>Produit</th><th>Quantité</th><th>Unité</th><th>Prix unitaire</th><th>Valeur</th></tr></thead><tbody>
+      ${v.factures.map(f=>f.lignes.map((l,i)=>`<tr><td>${i===0?escapeHtml(f.numero):''}</td><td>${escapeHtml(l.produit)}</td><td class="num">${fmtNum(l.quantite)}</td><td>${escapeHtml(l.unite||'')}</td><td class="num">${fmtFCFA(l.prixUnitaire)}</td><td class="num">${fmtFCFA(l.valeur)}</td></tr>`).join('')).join('')}
+    </tbody></table></div>
+  </td></tr>`;
+}
 function lastVisitDate(clientId){
   const vs = visitesForClient(clientId);
   return vs.length ? vs[0].date : null;
@@ -1295,6 +1348,7 @@ function navFor(user){
   if(user.role==='adv'){
     return [
       {r:'#/scan', l:'Scanner un client', i:'camera'},
+      {r:'#/import-ventes', l:'Importer les ventes', i:'download'},
       {r:'#/comptes', l:'Comptes à créer', i:'idcard'},
       {r:'#/activite', l:'Activité générale', i:'journal'},
       {r:'#/prospection', l:'Suivi de la prospection', i:'userplus'},
@@ -1324,7 +1378,7 @@ const PAGE_TITLES = {
   '#/base-clients':'Base de données clients', '#/carte':'Carte clients', '#/frigo':'Clients avec frigo',
   '#/mes-stats':'Mes statistiques', '#/fiche':'Fiche de suivi superviseur', '#/journal':'Journal d\'activité superviseur', '#/pricing':'Pricing marché', '#/equipe':'Vue équipe',
   '#/dashboard':'Tableau de bord', '#/comptes':'Comptes à créer', '#/activite':'Activité générale', '#/prospection':'Suivi de la prospection',
-  '#/superviseurs':'Suivi des superviseurs', '#/scan':'Scanner un client',
+  '#/superviseurs':'Suivi des superviseurs', '#/scan':'Scanner un client', '#/import-ventes':'Importer les ventes',
 };
 
 function renderShellHTML(user){
@@ -1416,6 +1470,7 @@ function renderRoute(content, user, route){
   if(route==='#/prospection') return renderSuiviProspection(content, user);
   if(route==='#/superviseurs') return renderSuiviSuperviseurs(content, user);
   if(route==='#/scan') return renderScanClient(content, user);
+  if(route==='#/import-ventes') return renderImportVentes(content, user);
   content.innerHTML = `<div class="empty-state">Page introuvable.</div>`;
 }
 
@@ -1444,6 +1499,189 @@ function renderScanClient(content, user){
   if(btn) btn.addEventListener('click', launchScan);
   // Ouvre la caméra immédiatement : l'utilisateur vient de cliquer sur "Scanner un client" dans le menu.
   launchScan();
+}
+
+/* ============================== IMPORT DES VENTES ERP (ADV) ============================== */
+// Permet à l'ADV d'importer directement le fichier Excel journalier exporté de l'ERP (mouvements
+// de ventes), afin de rattacher automatiquement chaque facture au passage du commercial enregistré
+// ce jour-là pour le même client (rapprochement par date exacte + code client), sans ressaisie
+// manuelle du commercial. Un passage qui ne reçoit aucune facture à l'import devient "Non vendu"
+// automatiquement ; une facture sans passage terrain ce jour-là crée quand même une vente
+// rattachée au client, marquée "sans passage terrain", pour qu'elle compte dans le CA et les
+// statistiques produits. L'import est idempotent : le réimporter (ou importer un fichier dont la
+// période chevauche un import précédent) recalcule simplement les mêmes factures sans créer de
+// doublon.
+function renderImportVentes(content, user){
+  if(user.role!=='adv'){
+    content.innerHTML = `<div class="empty-state">Accès réservé à l'ADV.</div>`;
+    return;
+  }
+  content.innerHTML = `
+    <div class="page-head">
+      <div><h1>Importer les ventes</h1>
+        <p class="page-sub">Importez le fichier Excel des mouvements de ventes de l'ERP pour rattacher automatiquement chaque facture au passage du jour, sans ressaisie manuelle.</p></div>
+    </div>
+    <div class="banner" style="margin-bottom:14px;">Rapprochement par date exacte et code client. Une vente sans passage terrain ce jour-là est quand même enregistrée (marquée « sans passage »). Un passage qui ne reçoit aucune facture après l'import devient automatiquement « Non vendu ». Réimporter un fichier (ou un fichier dont la période chevauche un import précédent) ne crée pas de doublon.</div>
+    <div class="card" style="max-width:640px;">
+      <div class="card-title" style="margin-bottom:8px;">Fichier Excel ERP (mouvements de ventes)</div>
+      <input type="file" id="erp-file-input" accept=".xlsx,.xls">
+      <div style="margin-top:12px;"><button class="btn primary" id="erp-analyze-btn" disabled>${icon('download')} Analyser le fichier</button></div>
+      <div id="erp-import-result" style="margin-top:16px;"></div>
+    </div>
+  `;
+  const fileInput = content.querySelector('#erp-file-input');
+  const analyzeBtn = content.querySelector('#erp-analyze-btn');
+  const resultBox = content.querySelector('#erp-import-result');
+  let currentFile = null;
+  let analyse = null; // résultat de analyzeErpFile()
+  fileInput.addEventListener('change', ()=>{
+    currentFile = fileInput.files[0] || null;
+    analyzeBtn.disabled = !currentFile;
+    resultBox.innerHTML = '';
+  });
+  analyzeBtn.addEventListener('click', async ()=>{
+    if(!currentFile) return;
+    analyzeBtn.disabled = true; analyzeBtn.textContent = 'Lecture du fichier…';
+    try{
+      analyse = await analyzeErpFile(currentFile);
+      renderErpPreview();
+    }catch(e){
+      resultBox.innerHTML = `<div class="helptext" style="color:var(--critical);">${escapeHtml(e.message||"Échec de la lecture du fichier.")}</div>`;
+    }
+    analyzeBtn.disabled = false; analyzeBtn.innerHTML = `${icon('download')} Analyser le fichier`;
+  });
+  function renderErpPreview(){
+    const { groupes, dates, clientsIntrouvables } = analyse;
+    resultBox.innerHTML = `
+      <div class="card" style="padding:12px 14px;border-color:var(--accent);">
+        <div class="card-title" style="margin-bottom:8px;">Aperçu avant import</div>
+        <div class="form-grid" style="font-size:12.5px;margin-bottom:10px;">
+          <div><span class="helptext">Période couverte</span><br><b>${dates.length?dates.map(fmtDateFR).join(', '):'—'}</b></div>
+          <div><span class="helptext">Clients avec vente trouvée</span><br><b>${groupes.length}</b></div>
+          <div><span class="helptext">Clients introuvables (code inconnu)</span><br><b style="${clientsIntrouvables.length?'color:var(--critical);':''}">${clientsIntrouvables.length}</b></div>
+        </div>
+        ${clientsIntrouvables.length ? `<div class="helptext" style="margin-bottom:10px;">Codes non reconnus dans la base (vérifiez qu'ils correspondent bien à des comptes créés) : ${clientsIntrouvables.map(escapeHtml).join(', ')}</div>` : ''}
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn primary" id="erp-confirm-btn">${icon('check')} Confirmer l'import</button>
+          <button class="btn ghost" id="erp-cancel-btn">Annuler</button>
+        </div>
+      </div>
+    `;
+    resultBox.querySelector('#erp-cancel-btn').addEventListener('click', ()=>{
+      analyse = null; resultBox.innerHTML=''; fileInput.value=''; currentFile=null; analyzeBtn.disabled=true;
+    });
+    resultBox.querySelector('#erp-confirm-btn').addEventListener('click', ()=>confirmErpImport());
+  }
+  async function confirmErpImport(){
+    const confirmBtn = resultBox.querySelector('#erp-confirm-btn');
+    const cancelBtn = resultBox.querySelector('#erp-cancel-btn');
+    if(confirmBtn) confirmBtn.disabled = true;
+    if(cancelBtn) cancelBtn.disabled = true;
+    const stats = { rattachees:0, sansPassage:0, nonVendu:0 };
+    let i = 0;
+    for(const g of analyse.groupes){
+      i++;
+      if(confirmBtn) confirmBtn.textContent = `Import en cours… (${i}/${analyse.groupes.length})`;
+      try{
+        const r = await applyErpGroupe(g);
+        if(r==='rattachee') stats.rattachees++; else if(r==='sans_passage') stats.sansPassage++;
+      }catch(e){ toast(`Échec pour ${g.clientNom} : ${e.message||'erreur inconnue'}.`, 'critical'); }
+    }
+    try{
+      stats.nonVendu = await markPendingVisitesAsNonVendu(analyse.minDate, analyse.maxDate);
+    }catch(e){ toast("Échec lors du marquage des passages sans vente.", 'critical'); }
+    resultBox.innerHTML = `
+      <div class="card" style="padding:12px 14px;border-color:var(--good);">
+        <div class="card-title" style="margin-bottom:8px;">${icon('check')} Import terminé</div>
+        <div class="helptext">${stats.rattachees} passage(s) rattaché(s) à une facture, ${stats.sansPassage} vente(s) enregistrée(s) sans passage terrain, ${stats.nonVendu} passage(s) marqué(s) « Non vendu » (aucune facture trouvée) sur la période ${analyse.dates.map(fmtDateFR).join(', ')}.</div>
+      </div>
+    `;
+    toast('Import terminé.', 'good');
+  }
+}
+
+// Lit le fichier Excel ERP, regroupe les lignes par (facture, code client) puis par (code client,
+// date) — un même client peut avoir plusieurs factures le même jour, elles sont additionnées —
+// et retrouve le client correspondant dans la base pour chaque groupe. Ne modifie rien en base :
+// sert uniquement à préparer l'aperçu affiché avant confirmation.
+async function analyzeErpFile(file){
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, {type:'array', cellDates:true});
+  let sheetName = null;
+  for(const sn of wb.SheetNames){
+    const head = (XLSX.utils.sheet_to_json(wb.Sheets[sn], {header:1, range:0})[0]) || [];
+    if(head.includes('Code de compte du client')){ sheetName = sn; break; }
+  }
+  if(!sheetName) throw new Error('Colonne "Code de compte du client" introuvable dans ce fichier — format inattendu.');
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {defval:null});
+  const facturesMap = new Map();
+  for(const r of rows){
+    const code = (r['Code de compte du client']||'').toString().trim();
+    const numero = (r['Facture']||'').toString().trim();
+    if(!code || !numero) continue;
+    const dateIso = excelDateToISO(r['Date']);
+    if(!dateIso) continue;
+    const key = numero+'|'+code;
+    if(!facturesMap.has(key)) facturesMap.set(key, { numero, code, date: dateIso, nomClient: r['Nom du client']||'', lignes: [], total: 0 });
+    const f = facturesMap.get(key);
+    const qte = Number(r['Quantité'])||0;
+    const prix = Number(r['Prix'])||0;
+    const valeurBrute = Number(r['Valeur']);
+    const valeur = isNaN(valeurBrute) ? qte*prix : valeurBrute;
+    f.lignes.push({ produit: r['Nom de matière']||'', quantite: qte, unite: r['Unité']||'', prixUnitaire: prix, valeur });
+    f.total += valeur;
+  }
+  const factures = [...facturesMap.values()];
+  if(!factures.length) throw new Error('Aucune ligne exploitable trouvée dans ce fichier.');
+  const parClientDate = new Map();
+  for(const f of factures){
+    const key = f.code+'|'+f.date;
+    if(!parClientDate.has(key)) parClientDate.set(key, { code: f.code, date: f.date, nomClient: f.nomClient, factures: [] });
+    parClientDate.get(key).factures.push(f);
+  }
+  const clientsIntrouvables = new Set();
+  const groupes = [];
+  for(const g of parClientDate.values()){
+    const client = [...APP.clients.values()].find(c=>c.code && c.code===g.code);
+    if(!client){ clientsIntrouvables.add(g.code + (g.nomClient?(' — '+g.nomClient):'')); continue; }
+    groupes.push({ clientId: client.id, clientNom: client.nom, date: g.date, factures: g.factures, total: g.factures.reduce((s,f)=>s+f.total,0) });
+  }
+  const dates = [...new Set(factures.map(f=>f.date))].sort();
+  return { groupes, dates, minDate: dates[0], maxDate: dates[dates.length-1], clientsIntrouvables: [...clientsIntrouvables] };
+}
+
+// Applique un groupe (un client, une date, une ou plusieurs factures) : rattache au passage déjà
+// enregistré ce jour-là s'il existe (en priorité celui en attente d'import), sinon crée une vente
+// "sans passage terrain". Idempotent : réappliquer le même groupe remplace simplement les mêmes
+// factures (par numéro) sans dupliquer.
+async function applyErpGroupe(g){
+  const facturesPayload = g.factures.map(f=>({ numero: f.numero, lignes: f.lignes, total: f.total }));
+  const visitesJour = [...APP.visites.values()].filter(v=>v.clientId===g.clientId && v.date===g.date);
+  const visite = visitesJour.find(v=>v.statut==='en_attente_import') || visitesJour[0] || null;
+  if(visite){
+    await dbUpdate('visites', visite.id, {
+      statut: 'vendu', montantTotal: g.total, factures: facturesPayload, raisonNonAchat: null,
+    }, APP.visites, `Import ventes ${g.clientNom}`);
+    return 'rattachee';
+  }
+  const client = APP.clients.get(g.clientId);
+  await dbCreate('visites', {
+    clientId: g.clientId, commercialId: (clientCommerciaux(client)[0]||null), date: g.date,
+    timestamp: new Date().toISOString(), gps: null, concurrence: '', statut: 'vendu',
+    produitsVendus: [], montantTotal: g.total, raisonNonAchat: null, factures: facturesPayload, sansPassage: true,
+  }, APP.visites, `Vente sans passage ${g.clientNom}`);
+  return 'sans_passage';
+}
+
+// Après avoir rattaché toutes les factures du fichier, les passages encore "en attente d'import"
+// dans la période couverte n'ont reçu aucune facture : ils deviennent "Non vendu" automatiquement.
+async function markPendingVisitesAsNonVendu(minDate, maxDate){
+  if(!minDate || !maxDate) return 0;
+  const enAttente = [...APP.visites.values()].filter(v=>v.statut==='en_attente_import' && v.date>=minDate && v.date<=maxDate);
+  for(const v of enAttente){
+    await dbUpdate('visites', v.id, { statut: 'non_vendu', raisonNonAchat: "Aucune facture trouvée à l'import ERP" }, APP.visites, `Import ventes — non vendu`);
+  }
+  return enAttente.length;
 }
 
 /* ============================== DEMO BANNER ============================== */
@@ -1504,9 +1742,7 @@ function clientRowNode(c, user){
   const v = visiteToday(c.id, user.id);
   let pill = `<span class="status-pill warning">À visiter</span>`;
   if(v){
-    pill = v.statut==='vendu'
-      ? `<span class="status-pill good">Vendu · ${fmtFCFA(v.montantTotal)}</span>`
-      : `<span class="status-pill critical">Non vendu</span>`;
+    pill = visiteStatutPillHTML(v, true);
   }
   const row = document.createElement('div'); row.className='client-row';
   row.innerHTML = `
@@ -1576,10 +1812,10 @@ function renderHistorique(content, user){
       <div class="table-wrap"><table><thead><tr><th>Heure</th><th>Client</th><th>Zone</th><th>Statut</th><th>Détail</th><th>Position</th></tr></thead><tbody>
         ${day.map(v=>{ const c = APP.clients.get(v.clientId);
           const heure = v.timestamp ? fmtDateTimeFR(v.timestamp).split(' ')[1]||'' : '';
-          const detail = v.statut==='vendu' ? fmtFCFA(v.montantTotal) : (v.raisonNonAchat||'—');
+          const detail = visiteMontantCell(v);
           const pos = positionBadge(v.gps);
           return `<tr><td class="num">${heure}</td><td>${c?escapeHtml(c.nom):'—'}</td><td>${c?escapeHtml(c.zone):'—'}</td>
-            <td>${v.statut==='vendu'?'<span class="status-pill good">Vendu</span>':'<span class="status-pill critical">Non vendu</span>'}</td>
+            <td>${visiteStatutPillHTML(v)}</td>
             <td class="num">${detail}</td><td>${pos}</td></tr>`;
         }).join('') || `<tr><td colspan="6" class="empty-state">Aucun passage ce jour-là.</td></tr>`}
       </tbody></table></div>
@@ -1613,12 +1849,12 @@ async function exportTourneePDF(dateISO, user, dayVisites){
       if(y>770){ doc.addPage(); y=50; }
       const c = APP.clients.get(v.clientId);
       const heure = v.timestamp ? (fmtDateTimeFR(v.timestamp).split(' ')[1]||'') : '';
-      const detail = v.statut==='vendu' ? fmtFCFA(v.montantTotal) : (v.raisonNonAchat||'—');
+      const detail = visiteMontantCell(v);
       const pos = v.gps ? v.gps.distanceM+' m' : '—';
       doc.text(String(heure), marginX, y);
       doc.text(String(c?c.nom:'—').slice(0,26), marginX+55, y);
       doc.text(String(c?c.zone:'—'), marginX+195, y);
-      doc.text(v.statut==='vendu'?'Vendu':'Non vendu', marginX+280, y);
+      doc.text(visiteStatutLabel(v), marginX+280, y);
       doc.text(String(detail).slice(0,20), marginX+345, y);
       doc.text(String(pos), marginX+460, y);
       y+=15;
@@ -1779,12 +2015,13 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
 
     <div class="card" style="padding:12px 14px;">
       <div class="card-title" style="margin-bottom:8px;">Historique des passages commercial (ventes)</div>
-      ${hist.length ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Heure</th><th>Commercial</th><th>Statut</th><th>Montant</th><th>Position</th></tr></thead><tbody>
+      ${hist.length ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Heure</th><th>Commercial</th><th>Statut</th><th>Montant</th><th>Position</th><th>Factures</th></tr></thead><tbody>
         ${hist.map(v=>{ const co = APP.profils.get(v.commercialId); return `<tr><td>${fmtDateFR(v.date)}</td><td>${v.timestamp?fmtDateTimeFR(v.timestamp).split(' ')[1]||'—':'—'}</td>
-        <td>${co?escapeHtml(co.nom):'—'}</td>
-        <td>${v.statut==='vendu'?'<span class="status-pill good">Vendu</span>':'<span class="status-pill critical">Non vendu</span>'}</td>
-        <td class="num">${v.statut==='vendu'?fmtFCFA(v.montantTotal):(v.raisonNonAchat||'—')}</td>
-        <td>${positionBadge(v.gps)}</td></tr>`;}).join('')}
+        <td>${co?escapeHtml(co.nom):(v.sansPassage?'<span class="helptext">Vente sans passage</span>':'—')}</td>
+        <td>${visiteStatutPillHTML(v)}</td>
+        <td class="num">${visiteMontantCell(v)}</td>
+        <td>${positionBadge(v.gps)}</td>
+        <td>${(v.factures&&v.factures.length)?`<button class="btn ghost sm" data-toggle-factures="${v.id}">Voir le détail</button>`:'<span class="helptext">—</span>'}</td></tr>${facturesDetailRowHTML(v,7)}`;}).join('')}
       </tbody></table></div>` : `<div class="helptext">Aucun passage commercial enregistré pour ce client.</div>`}
     </div>
 
@@ -2007,15 +2244,35 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
       deleteClientBtn.disabled = false; deleteClientBtn.innerHTML = `${icon('trash')} Supprimer définitivement`;
     }
   });
+  backdrop.querySelectorAll('[data-toggle-factures]').forEach(btn=>btn.addEventListener('click', ()=>{
+    const row = backdrop.querySelector(`[data-facture-detail="${btn.getAttribute('data-toggle-factures')}"]`);
+    if(!row) return;
+    const isOpen = row.style.display !== 'none';
+    row.style.display = isOpen ? 'none' : 'table-row';
+    btn.textContent = isOpen ? 'Voir le détail' : 'Masquer le détail';
+  }));
   if(canRecordVisit) renderVisitForm(backdrop.querySelector('#visit-form-body'), c, user, existingToday, backdrop);
 }
 
 function renderVisitForm(box, c, user, existing, backdrop){
   if(existing){
-    box.innerHTML = `<div class="status-pill ${existing.statut==='vendu'?'good':'critical'}" style="display:inline-block;margin-bottom:8px;">
-      ${existing.statut==='vendu' ? 'Vendu · '+fmtFCFA(existing.montantTotal) : 'Non vendu · '+escapeHtml(existing.raisonNonAchat||'')}</div>
+    const cls = existing.statut==='vendu' ? 'good' : (existing.statut==='non_vendu' ? 'critical' : 'muted');
+    const label = existing.statut==='vendu' ? 'Vendu · '+fmtFCFA(existing.montantTotal)
+      : existing.statut==='non_vendu' ? 'Non vendu · '+escapeHtml(existing.raisonNonAchat||'')
+      : "Passage enregistré · en attente de l'import des ventes du jour par l'ADV";
+    box.innerHTML = `<div class="status-pill ${cls}" style="display:inline-block;margin-bottom:8px;">${label}</div>
       <p class="helptext">Passage déjà enregistré aujourd'hui à ${fmtDateTimeFR(existing.timestamp).split(' ')[1]||''}.
       ${existing.gps ? ' Position à '+existing.gps.distanceM+' m du client.' : ''}</p>`;
+    return;
+  }
+  // Un client déjà actif a un code ERP : ses ventes seront détectées automatiquement ce soir à
+  // l'import des factures par l'ADV (rapprochement par date + code client), donc le commercial
+  // n'a plus besoin de déclarer "Vendu/Non vendu" ni de ressaisir montant ou produits — il
+  // enregistre juste son passage (heure, position). Pour un prospect ou une vente en attente de
+  // création de compte (pas encore de code ERP), le formulaire complet reste nécessaire : c'est
+  // la déclaration "Vendu" du commercial qui déclenche la demande de création de compte par l'ADV.
+  if(c.statut==='actif'){
+    renderVisitFormSimplifie(box, c, user, backdrop);
     return;
   }
   let gps = null;
@@ -2121,6 +2378,63 @@ function renderVisitForm(box, c, user, existing, backdrop){
   const autoGpsBtn = box.querySelector('#gps-btn');
   if(autoGpsBtn) autoGpsBtn.click();
 }
+// Formulaire de passage simplifié pour un client déjà actif (code ERP existant) : plus de choix
+// Vendu/Non vendu, plus de catégories de produits, plus de montant à saisir à la main — tout sera
+// déduit automatiquement ce soir par l'import des ventes ERP (rapprochement par date + code
+// client). Seuls restent la vérification de position (identique à l'ancien formulaire) et le
+// repérage facultatif d'un concurrent en boutique.
+function renderVisitFormSimplifie(box, c, user, backdrop){
+  let gps = null;
+  let concurrentChoisi = '';
+  function renderInner(){
+    box.innerHTML = `
+      <div class="helptext" style="margin-bottom:10px;">Ce client a déjà un compte actif : il suffit d'enregistrer votre passage. Les ventes du jour seront automatiquement rattachées ce soir, après l'import des factures par l'ADV — plus besoin de ressaisir le montant ou les produits.</div>
+      <label class="field" style="margin:10px 0;">Concurrent identifié en boutique (facultatif)
+        <select id="concurrent-select">
+          <option value="">Aucun concurrent identifié</option>
+          ${CONCURRENTS.map(nom=>`<option value="${escapeHtml(nom)}" ${concurrentChoisi===nom?'selected':''}>${escapeHtml(nom)}</option>`).join('')}
+        </select>
+      </label>
+      <div class="gps-box" id="gps-box" style="margin:10px 0;">
+        ${gps ? `<b>${gps.distanceM<=300?'✓ Position confirmée':'⚠ Visite à distance'}</b> · ${gps.distanceM} m du client enregistré${gps.distanceM>300?' — ce passage sera signalé comme « à distance » à l\'ADV et à la direction.':''}`
+              : `Localisation en cours pour confirmer la visite…`}
+        <div style="margin-top:6px;"><button class="btn sm" id="gps-btn">${icon('pin')} ${gps?'Revérifier':'Vérifier'} ma position</button></div>
+      </div>
+      <button class="btn primary" id="submit-visit" style="width:100%;justify-content:center;">Enregistrer le passage</button>
+    `;
+    box.querySelector('#concurrent-select').addEventListener('change', e=>{ concurrentChoisi = e.target.value; });
+    box.querySelector('#gps-btn').addEventListener('click', ()=>{
+      const btn = box.querySelector('#gps-btn'); btn.disabled = true; btn.textContent='Localisation…';
+      getPositionWithFallback(pos=>{
+        const dist = Math.round(haversineM(pos.coords.latitude, pos.coords.longitude, c.lat, c.lng));
+        gps = {lat: pos.coords.latitude, lng: pos.coords.longitude, distanceM: dist};
+        renderInner();
+      }, err=>{
+        toast('Position indisponible ('+(err.message||'refusée')+'). Vous pouvez continuer sans GPS.', 'warning');
+        renderInner();
+      });
+    });
+    box.querySelector('#submit-visit').addEventListener('click', ()=>submitVisitSimplifie());
+  }
+  async function submitVisitSimplifie(){
+    if(!APP.db) return;
+    const btn = box.querySelector('#submit-visit'); btn.disabled = true; btn.textContent = 'Enregistrement…';
+    const payload = {
+      clientId: c.id, commercialId: user.id, date: todayISO(), timestamp: new Date().toISOString(),
+      gps: gps || null, concurrence: concurrentChoisi || '',
+      statut: 'en_attente_import', produitsVendus: [], montantTotal: 0, raisonNonAchat: null,
+      factures: [], sansPassage: false,
+    };
+    try{
+      const vr = await dbCreate('visites', payload, APP.visites, `Passage ${c.nom}`);
+      toast(vr.queued ? "Hors connexion — passage enregistré sur l'appareil, sera envoyé automatiquement." : "Passage enregistré — en attente de l'import des ventes du jour.", 'good');
+      if(backdrop) backdrop.remove();
+    }catch(e){ toast('Échec de l\'enregistrement.', 'critical'); btn.disabled=false; btn.textContent='Enregistrer le passage'; }
+  }
+  renderInner();
+  const autoGpsBtn = box.querySelector('#gps-btn');
+  if(autoGpsBtn) autoGpsBtn.click();
+}
 
 /* ============================== NOUVEAU CLIENT ============================== */
 
@@ -2199,7 +2513,7 @@ function drawZoneMap(container, clients, user){
     const isProspect = c.statut==='prospect';
     const v = clientCommerciaux(c).map(id=>visiteToday(c.id, id)).find(Boolean) || null;
     const isAValider = c.statut==='a_valider';
-    const color = v ? (v.statut==='vendu'?'var(--good)':'var(--critical)') : clientPrimaryZoneColor(c.secteur);
+    const color = v ? visiteStatutColor(v) : clientPrimaryZoneColor(c.secteur);
     const dot = svgEl('circle', {cx:x,cy:y,r: c.aFrigo?7:5.5, fill: (isProspect||isAValider)?'none':color,
       stroke: isProspect?'var(--warning)':(isAValider?'var(--accent)':'var(--surface)'), 'stroke-width': (isProspect||isAValider)?2.5:2,
       'stroke-dasharray': isProspect?'2,2':'none', style:'cursor:pointer;'});
@@ -3082,10 +3396,10 @@ function openCommercialHistoryModal(commercialId, viewerUser){
       <div class="table-wrap"><table><thead><tr><th>Heure</th><th>Client</th><th>Zone</th><th>Statut</th><th>Détail</th><th>Position</th></tr></thead><tbody>
         ${day.map(v=>{ const c = APP.clients.get(v.clientId);
           const heure = v.timestamp ? fmtDateTimeFR(v.timestamp).split(' ')[1]||'' : '';
-          const detail = v.statut==='vendu' ? fmtFCFA(v.montantTotal) : (v.raisonNonAchat||'—');
+          const detail = visiteMontantCell(v);
           const pos = positionBadge(v.gps);
           return `<tr><td class="num">${heure}</td><td>${c?escapeHtml(c.nom):'—'}</td><td>${c?escapeHtml(c.zone):'—'}</td>
-            <td>${v.statut==='vendu'?'<span class="status-pill good">Vendu</span>':'<span class="status-pill critical">Non vendu</span>'}</td>
+            <td>${visiteStatutPillHTML(v)}</td>
             <td class="num">${detail}</td><td>${pos}</td></tr>`;
         }).join('') || `<tr><td colspan="6" class="empty-state">Aucun passage ce jour-là.</td></tr>`}
       </tbody></table></div>
@@ -3188,6 +3502,7 @@ function renderDashboardBody(box, f){
       <div class="card"><div class="card-title" style="margin-bottom:10px;">CA par secteur</div><div id="chart-zone"></div></div>
       <div class="card"><div class="card-title" style="margin-bottom:10px;">Top 10 clients (CA)</div><div id="chart-top"></div></div>
       <div class="card"><div class="card-title" style="margin-bottom:10px;">Équipement frigo</div><div id="chart-frigo"></div></div>
+      <div class="card"><div class="card-title" style="margin-bottom:10px;">Top 10 produits vendus (valeur, factures importées)</div><div id="chart-produits"></div></div>
     </div>
     <div class="card"><div class="card-title" style="margin-bottom:10px;">Objectif vs réalisé par client (mois en cours)</div><div class="table-wrap" id="obj-table"></div></div>
   `;
@@ -3220,6 +3535,17 @@ function renderDashboardBody(box, f){
   drawTwoBar(box.querySelector('#chart-frigo'),
     {label:'Avec frigo', value: baseClients.filter(c=>c.aFrigo).length, color:'var(--s1)'},
     {label:'Sans frigo', value: baseClients.filter(c=>!c.aFrigo).length, color:'var(--s2)'});
+
+  // Top produits vendus (valeur), calculé à partir des lignes de facture rattachées aux passages
+  // "vendu" de la période — alimenté par l'import des ventes ERP (renderImportVentes). Les ventes
+  // antérieures à cette fonctionnalité, ou saisies manuellement pour un prospect, n'ont pas de
+  // détail produit réel et n'apparaissent donc pas ici.
+  const byProduit = {};
+  vendues.forEach(v=>{ (v.factures||[]).forEach(fa=>{ (fa.lignes||[]).forEach(l=>{
+    if(!l.produit) return;
+    byProduit[l.produit] = (byProduit[l.produit]||0) + (l.valeur||0);
+  }); }); });
+  drawBarChartH(box.querySelector('#chart-produits'), Object.entries(byProduit).map(([label,value])=>({label,value})).sort((a,b)=>b.value-a.value).slice(0,10), fmtFCFA, 'var(--s3)');
 
   const objTable = box.querySelector('#obj-table');
   const rows = baseClients.map(c=>{
@@ -3916,8 +4242,8 @@ function renderActiviteGenerale(content, user){
     vBox.innerHTML = vRows.length ? `<table><thead><tr><th>Date</th><th>Commercial</th><th>Client</th><th>Statut</th><th>Montant</th><th>Position</th></tr></thead><tbody>
       ${vRows.map(v=>{ const co=APP.profils.get(v.commercialId); const cl=APP.clients.get(v.clientId);
         return `<tr data-client="${v.clientId}" style="cursor:pointer;"><td>${fmtDateFR(v.date)}</td><td>${co?escapeHtml(co.nom):'—'}</td><td>${cl?escapeHtml(cl.nom):'—'}</td>
-        <td>${v.statut==='vendu'?'<span class="status-pill good">Vendu</span>':'<span class="status-pill critical">Non vendu</span>'}</td>
-        <td class="num">${v.statut==='vendu'?fmtFCFA(v.montantTotal):'—'}</td><td>${positionBadge(v.gps)}</td></tr>`; }).join('')}
+        <td>${visiteStatutPillHTML(v)}</td>
+        <td class="num">${visiteMontantCell(v)}</td><td>${positionBadge(v.gps)}</td></tr>`; }).join('')}
     </tbody></table>` : `<div class="empty-state">Aucun passage pour cette période / ce secteur.</div>`;
     vBox.querySelectorAll('[data-client]').forEach(row=>row.addEventListener('click', ()=>openClientModal(row.getAttribute('data-client'), user, false, true)));
 

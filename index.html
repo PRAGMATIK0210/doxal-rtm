@@ -1820,8 +1820,8 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
       </div>
     </div>` : `<div class="card" style="padding:12px 14px;border-color:var(--critical);">
       <div class="card-title" style="margin-bottom:8px;color:var(--critical);">Zone dangereuse</div>
-      ${(c.statut==='prospect' || c.statut==='actif') ? `<div class="helptext" style="margin-bottom:10px;">Ce ${c.statut==='actif'?'compte':'prospect'} fait doublon avec un client déjà existant dans la base${c.statut==='actif'?' (même après la création du compte)':''} ? Supprimez-le directement ci-dessous, sans passer par l'archivage — cette action est IRRÉVERSIBLE.</div>
-      <button class="btn danger sm" id="delete-prospect-btn" style="margin-bottom:12px;">${icon('trash')} Supprimer ${c.statut==='actif'?'ce compte':'ce prospect'} (doublon)</button>
+      ${(c.statut==='prospect' || c.statut==='actif' || c.statut==='a_valider') ? `<div class="helptext" style="margin-bottom:10px;">${c.statut==='actif'?'Ce compte':(c.statut==='a_valider'?'Cette vente en attente':'Ce prospect')} fait doublon avec un client déjà existant dans la base${c.statut==='actif'?' (même après la création du compte)':''} ? Supprimez-le directement ci-dessous, sans passer par l'archivage — cette action est IRRÉVERSIBLE.</div>
+      <button class="btn danger sm" id="delete-prospect-btn" style="margin-bottom:12px;">${icon('trash')} Supprimer ${c.statut==='actif'?'ce compte':(c.statut==='a_valider'?'cette vente en attente':'ce prospect')} (doublon)</button>
       <div class="divider" style="margin-bottom:10px;"></div>` : ''}
       <div class="helptext" style="margin-bottom:10px;">Archivez ce client pour le retirer des listes de travail (portefeuilles, recherche, tableaux de bord) sans perdre son historique — réservé aux doublons ou erreurs de création. Un client archivé reste restaurable à tout moment.</div>
       <button class="btn sm" id="archive-client-btn">${icon('trash')} Archiver ce client</button>
@@ -1969,8 +1969,8 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
   });
   const deleteProspectBtn = backdrop.querySelector('#delete-prospect-btn');
   if(deleteProspectBtn) deleteProspectBtn.addEventListener('click', async ()=>{
-    const dupMot = c.statut==='actif' ? 'compte' : 'prospect';
-    if(!confirm(`Supprimer DÉFINITIVEMENT ce ${dupMot}, ${c.nom} ?\n\nÀ utiliser uniquement si ce ${dupMot} fait doublon avec un client déjà existant dans la base. Cette action est IRRÉVERSIBLE, contrairement à l'archivage : la fiche et son éventuel QR code seront perdus pour toujours.`)) return;
+    const dupLabel = c.statut==='actif' ? 'ce compte' : (c.statut==='a_valider' ? 'cette vente en attente' : 'ce prospect');
+    if(!confirm(`Supprimer DÉFINITIVEMENT ${dupLabel}, ${c.nom} ?\n\nÀ utiliser uniquement si ${dupLabel} fait doublon avec un client déjà existant dans la base. Cette action est IRRÉVERSIBLE, contrairement à l'archivage : la fiche et son éventuel QR code seront perdus pour toujours.`)) return;
     deleteProspectBtn.disabled = true; deleteProspectBtn.textContent = 'Suppression…';
     try{
       await dbDelete('clients_rtm', clientId, APP.clients, `Suppression doublon ${c.nom}`);
@@ -1978,7 +1978,7 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
       backdrop.remove();
     }catch(e){
       toast(e && e.message==='offline' ? 'Suppression impossible hors connexion — réessayez une fois connecté.' : 'Échec de la suppression.', 'critical');
-      deleteProspectBtn.disabled = false; deleteProspectBtn.innerHTML = `${icon('trash')} Supprimer ${dupMot==='compte'?'ce compte':'ce prospect'} (doublon)`;
+      deleteProspectBtn.disabled = false; deleteProspectBtn.innerHTML = `${icon('trash')} Supprimer ${dupLabel} (doublon)`;
     }
   });
   const restoreClientBtn = backdrop.querySelector('#restore-client-btn');
@@ -3802,7 +3802,7 @@ function renderComptesAValider(content, user){
   content.innerHTML = `
     ${demoBannerHTML()}
     <div class="page-head"><div><h1>Comptes à créer</h1><p class="page-sub">${isAdv?'Ventes enregistrées par les commerciaux en attente d\'un code client et de la création du compte (ADV).':'Ventes enregistrées par les commerciaux en attente de la création du compte par l\'ADV (lecture seule).'}</p></div></div>
-    ${isAdv ? `<div class="banner" style="margin-bottom:14px;">Un client passe à l'état « actif » uniquement après qu'un code lui a été attribué ici. Tant qu'aucun code n'est créé, le commercial le voit comme « en attente ».</div>` : ''}
+    ${isAdv ? `<div class="banner" style="margin-bottom:14px;">Un client passe à l'état « actif » uniquement après qu'un code lui a été attribué ici. Tant qu'aucun code n'est créé, le commercial le voit comme « en attente ». Si une de ces ventes en attente fait doublon avec un client déjà existant, utilisez « Supprimer ce doublon » plutôt que de lui créer un compte.</div>` : ''}
     <div id="comptes-list"></div>
   `;
   wireDemoBanner(content);
@@ -3828,6 +3828,7 @@ function renderComptesAValider(content, user){
         ${isAdv ? `<div class="dyn-row">
           <input type="text" placeholder="Code client (ex : CLTDIV1234)" id="code-input-${c.id}" style="text-transform:uppercase;">
           <button class="btn primary sm" data-create="${c.id}">${icon('idcard')} Créer le compte</button>
+          <button class="btn danger sm" data-delete-doublon="${c.id}">${icon('trash')} Supprimer ce doublon</button>
         </div>` : ''}
       </div>`;
     }).join('');
@@ -3844,6 +3845,21 @@ function renderComptesAValider(content, user){
         toast(r.queued ? "Hors connexion — activation enregistrée sur l'appareil, sera envoyée automatiquement." : 'Compte créé — le client est maintenant actif dans la base du commercial.', 'good');
         apply();
       }catch(e){ toast('Échec de la création du compte.', 'critical'); btn.disabled=false; btn.textContent='Créer le compte'; }
+    }));
+    if(isAdv) box.querySelectorAll('[data-delete-doublon]').forEach(btn=>btn.addEventListener('click', async ()=>{
+      const cid = btn.getAttribute('data-delete-doublon');
+      const cl = APP.clients.get(cid);
+      const nom = cl ? cl.nom : '';
+      if(!confirm(`Supprimer DÉFINITIVEMENT cette vente en attente, ${nom} ?\n\nÀ utiliser uniquement si elle fait doublon avec un client déjà existant dans la base (par exemple un client qui a déjà un compte actif). Cette action est IRRÉVERSIBLE : la fiche et son éventuel QR code seront perdus pour toujours.`)) return;
+      btn.disabled = true; btn.textContent = 'Suppression…';
+      try{
+        await dbDelete('clients_rtm', cid, APP.clients, `Suppression doublon ${nom}`);
+        toast(`${nom} a été supprimé (doublon).`, 'good');
+        apply();
+      }catch(e){
+        toast(e && e.message==='offline' ? 'Suppression impossible hors connexion — réessayez une fois connecté.' : 'Échec de la suppression.', 'critical');
+        btn.disabled = false; btn.innerHTML = `${icon('trash')} Supprimer ce doublon`;
+      }
     }));
   }
   apply();

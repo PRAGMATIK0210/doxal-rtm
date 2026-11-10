@@ -1697,8 +1697,14 @@ async function applyErpGroupe(g){
   let visite = null;
   if(g.commercialId){
     visite = visitesJour.find(v=>v.commercialId===g.commercialId && v.statut==='en_attente_import') || visitesJour.find(v=>v.commercialId===g.commercialId) || null;
-  }else if(visitesJour.length===1){
-    visite = visitesJour[0];
+  }else{
+    // Commercial non résolu (nom de centre de coût absent ou non reconnu) : on cherche d'abord une
+    // vente « sans passage » déjà créée par un import précédent pour ce même nom brut de centre de
+    // coût, afin de la mettre à jour plutôt que d'en recréer une à chaque réimport (sinon, le même
+    // nom non reconnu recréait un doublon à chaque fois qu'on réimportait la même période). À
+    // défaut, on ne rattache que si le cas n'est pas ambigu (un seul passage ce jour-là).
+    visite = visitesJour.find(v=>v.sansPassage && !v.commercialId && v.commercialErpNom===(g.centreCoutNom||null))
+      || (visitesJour.length===1 ? visitesJour[0] : null);
   }
   if(visite){
     await dbUpdate('visites', visite.id, {

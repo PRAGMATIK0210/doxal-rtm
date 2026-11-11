@@ -708,9 +708,16 @@ function todayDate(){ return new Date(); }
 function isoDate(d){ return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
 function todayISO(){ return isoDate(todayDate()); }
 function todayWeekdayFR(){ return JOURS_FR[todayDate().getDay()]; }
-// Convertit une cellule date d'un fichier Excel importé (objet Date si XLSX.read a été appelé
-// avec {cellDates:true}, ou nombre de série Excel en secours) vers notre format ISO "aaaa-mm-jj",
-// en utilisant les composantes UTC pour rester indépendant du fuseau horaire du navigateur.
+// Convertit une cellule date d'un fichier Excel importé (nombre de série Excel — cas normal, car on
+// lit volontairement le fichier SANS {cellDates:true}, voir plus bas — ou objet Date en secours si une
+// source fournit un jour directement un objet Date) vers notre format ISO "aaaa-mm-jj", en utilisant les
+// composantes UTC pour rester indépendant du fuseau horaire du navigateur. Important : on n'utilise
+// jamais la conversion automatique de la librairie XLSX en objet Date (option cellDates:true), car elle
+// construit cet objet Date avec l'heure LOCALE de l'appareil qui fait l'import — si cet appareil n'est
+// pas réglé exactement sur UTC (ex : UTC+1), la date resituée peut être décalée d'un jour en moins
+// (une vente du 10 était importée comme si elle datait du 09). Le numéro de série Excel, lui, est un
+// simple nombre sans aucune notion de fuseau horaire : on le convertit nous-mêmes ci-dessous, de façon
+// fiable quel que soit le fuseau horaire de l'appareil.
 function excelDateToISO(d){
   if(!d) return null;
   let date = d;
@@ -1633,7 +1640,7 @@ function resolveCommercialFromCentreCout(nomBrut){
 // uniquement à préparer l'aperçu affiché avant confirmation.
 async function analyzeErpFile(file){
   const buf = await file.arrayBuffer();
-  const wb = XLSX.read(buf, {type:'array', cellDates:true});
+  const wb = XLSX.read(buf, {type:'array', cellDates:false});
   let sheetName = null;
   for(const sn of wb.SheetNames){
     const head = (XLSX.utils.sheet_to_json(wb.Sheets[sn], {header:1, range:0})[0]) || [];

@@ -465,10 +465,10 @@ function printQrImage(dataUrl, nom, initiales){
   const w = window.open('', '_blank', 'width=420,height=560');
   if(!w){ toast("Impossible d'ouvrir la fenêtre d'impression (bloquée par le navigateur).", 'warning'); return; }
   w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>QR code — ${escapeHtml(nom||'')}</title>
-    <style>body{font-family:sans-serif;text-align:center;padding:30px;} img{width:260px;height:260px;} h2{margin:14px 0 2px;} p{color:#666;margin:0;}</style>
+    <style>body{font-family:sans-serif;text-align:center;padding:30px;} img{width:260px;height:260px;display:block;margin:0 auto 14px;} h2{margin:0 0 14px;} p{color:#666;margin:0;}</style>
     </head><body>
-    <img src="${dataUrl}" alt="QR code">
     <h2>${escapeHtml(nom||'')}</h2>
+    <img src="${dataUrl}" alt="QR code">
     <p>${initiales?escapeHtml(initiales):''}</p>
     <script>window.onload = function(){ setTimeout(function(){ window.print(); }, 200); };<\/script>
     </body></html>`);
@@ -4066,15 +4066,17 @@ async function exportClientsQrPDF(clients, triggerBtn){
     clients.forEach((c, idx)=>{
       if(y + cellH > 800){ doc.addPage(); x = marginX; y = marginY; col = 0; }
       const dataUrl = dataUrls[idx];
+      // Nom du client en haut de la vignette, QR code au milieu, initiales du commercial en bas —
+      // l'étiquette se lit ainsi du nom vers le QR une fois découpée et collée chez le client.
+      doc.setFont('helvetica','bold'); doc.setFontSize(11);
+      doc.text(String(c.nom||'').slice(0,26), x + cellW/2, y + 12, {align:'center', maxWidth: cellW-6});
       // Compression 'SLOW' : sans elle, jsPDF stocke chaque QR en bitmap brut non compressé
       // (~270 Ko par QR, soit plus de 150 Mo pour une feuille de 600 clients) — avec elle, on
       // retombe à la taille normale d'un PNG (quelques Ko par QR), fichier utilisable et
       // partageable, sans perte de lisibilité du QR code.
-      if(dataUrl){ try{ doc.addImage(dataUrl, 'PNG', x + (cellW-qrSize)/2, y, qrSize, qrSize, undefined, 'SLOW'); }catch(e){} }
-      doc.setFont('helvetica','bold'); doc.setFontSize(10);
-      doc.text(String(c.nom||'').slice(0,26), x + cellW/2, y + qrSize + 16, {align:'center', maxWidth: cellW-6});
-      doc.setFont('helvetica','normal'); doc.setFontSize(8.5);
-      doc.text(clientCommerciauxInitiales(c) || '', x + cellW/2, y + qrSize + 30, {align:'center'});
+      if(dataUrl){ try{ doc.addImage(dataUrl, 'PNG', x + (cellW-qrSize)/2, y + 20, qrSize, qrSize, undefined, 'SLOW'); }catch(e){} }
+      doc.setFont('helvetica','normal'); doc.setFontSize(9);
+      doc.text(clientCommerciauxInitiales(c) || '', x + cellW/2, y + 20 + qrSize + 16, {align:'center'});
       col++;
       if(col>=cols){ col=0; x = marginX; y += cellH; }
       else { x += cellW; }

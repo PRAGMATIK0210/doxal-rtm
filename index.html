@@ -417,8 +417,14 @@ function makeSupabaseDbShim(sb){
       // Supprime définitivement la ligne. Utilisé uniquement pour la suppression d'un client par
       // l'ADV depuis la Base de données clients (dbDelete ci-dessous).
       remove: async () => {
-        const { error } = await sb.from(name).delete().eq('id', id);
+        // Supabase ne renvoie PAS d'erreur si une règle de sécurité (RLS) empêche la suppression
+        // de cette ligne précise : la requête « réussit » avec 0 ligne réellement supprimée. Sans
+        // vérifier ce compte, l'app croyait à tort que la suppression avait eu lieu, alors que la
+        // fiche restait en base et reparaissait au prochain rafraîchissement (voir le bug « le
+        // doublon supprimé revient »).
+        const { error, count } = await sb.from(name).delete({count:'exact'}).eq('id', id);
         if(error) throw error;
+        if(!count) throw new Error('Suppression refusée par la base de données (aucune ligne supprimée) — vérifiez les règles de sécurité (RLS) sur la table "'+name+'".');
       },
     };
   }

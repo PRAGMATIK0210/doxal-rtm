@@ -1614,6 +1614,26 @@ function renderImportVentes(content, user){
 function normalizeNomPersonne(s){
   return (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z\s]/g,' ').replace(/\s+/g,' ').trim();
 }
+// Avant de créer un nouveau point de vente (prospection commercial ou superviseur), on vérifie si
+// un client du même nom (même après normalisation accents/casse) existe déjà dans la base, actif
+// ou non. On n'empêche JAMAIS la création — le terrain peut légitimement avoir deux commerces
+// différents portant le même nom — on se contente d'avertir avec les clients trouvés, pour que la
+// personne sur le terrain puisse vérifier avant de confirmer. Objectif : éviter que les doublons
+// supprimés dans « Comptes à créer » ne soient recréés sans qu'on s'en aperçoive.
+function findSimilarClients(nom, excludeId){
+  const norm = normalizeNomPersonne(nom);
+  if(!norm) return [];
+  return [...APP.clients.values()].filter(c=> c.id!==excludeId && !c.archive && normalizeNomPersonne(c.nom)===norm);
+}
+function confirmNoDoublon(nom){
+  const similar = findSimilarClients(nom);
+  if(!similar.length) return true;
+  const lignes = similar.map(c=>{
+    const statutLabel = c.statut==='actif' ? `compte actif${c.code?' ('+c.code+')':''}` : (c.statut==='a_valider' ? 'vente en attente de création de compte (ADV)' : 'déjà en prospection');
+    return `- ${c.nom} — ${statutLabel}${c.secteur?', secteur '+c.secteur:''}${c.zone?', zone '+c.zone:''}`;
+  }).join('\n');
+  return confirm(`Attention : ${similar.length} client(s) portant exactement le même nom existe(nt) déjà dans la base :\n\n${lignes}\n\nS'agit-il bien d'un point de vente différent ?\n\nOK = continuer et créer quand même ce nouveau point de vente.\nAnnuler = ne pas créer (vérifiez d'abord qu'il ne s'agit pas du même client).`);
+}
 // Retrouve le commercial correspondant à une valeur de la colonne "Nom du centre de coût" de
 // l'ERP. On ne devine jamais en cas d'ambiguïté : mieux vaut laisser la vente non attribuée à un
 // commercial (null) qu'attribuer une vente au mauvais commercial — c'est précisément l'erreur que
@@ -2812,6 +2832,7 @@ function renderAvecProspect(box, content, user, commercialId){
     if(!nom){ toast('Le nom du commerce est requis.', 'warning'); return; }
     const zone = box.querySelector('#fap-zone').value;
     if(!zone){ toast('Choisissez une zone.', 'warning'); return; }
+    if(!confirmNoDoublon(nom)) return;
     const btn = box.querySelector('#fap-submit'); btn.disabled=true; btn.textContent='Enregistrement…';
     const fallback = SECTEUR_FALLBACK_COORD[secteur] || [DAKAR_COORD.lat, DAKAR_COORD.lng];
     const contact = box.querySelector('#fap-contact').value.trim();
@@ -2980,6 +3001,7 @@ function renderSansProspect(box, content, user){
     const zone = zoneSel.value;
     const secteur = secteurForZone(zone);
     const responsable = responsibleCommercialForZone(zone);
+    if(!confirmNoDoublon(nom)) return;
     const btn = box.querySelector('#fp-submit'); btn.disabled=true; btn.textContent='Enregistrement…';
     const fallback = SECTEUR_FALLBACK_COORD[secteur] || [DAKAR_COORD.lat, DAKAR_COORD.lng];
     const contact = box.querySelector('#fp-contact').value.trim();
@@ -3872,6 +3894,7 @@ function renderTourneeProspecter(body, user){
     const zone = body.querySelector('#tp-zone').value;
     const secteur = user.secteur;
     const fallback = SECTEUR_FALLBACK_COORD[secteur] || [DAKAR_COORD.lat, DAKAR_COORD.lng];
+    if(!confirmNoDoublon(nom)) return;
     const btn = body.querySelector('#tp-submit'); btn.disabled=true; btn.textContent='Enregistrement…';
     const payload = {
       nom, secteur, zone, adresse: body.querySelector('#tp-adresse').value.trim(),

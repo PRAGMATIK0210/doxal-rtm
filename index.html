@@ -480,6 +480,48 @@ function printQrImage(dataUrl, nom, initiales){
     </body></html>`);
   w.document.close();
 }
+
+// Imprime une fiche papier par compte en attente de création (une page par fiche, saut de page
+// entre chaque) : nom du client, secteur, zone, téléphone, commercial, et une case vide à
+// remplir à la main avec le numéro de compte une fois celui-ci attribué — pratique pour préparer
+// le papier à l'avance avant une tournée, ou pour transmettre la liste à quelqu'un qui n'a pas
+// accès à l'application.
+function printComptesAValiderPDF(list){
+  if(!list.length){ toast('Aucun compte en attente à imprimer.', 'warning'); return; }
+  const w = window.open('', '_blank', 'width=800,height=900');
+  if(!w){ toast("Impossible d'ouvrir la fenêtre d'impression (bloquée par le navigateur).", 'warning'); return; }
+  const fichesHTML = list.map((c, idx)=>{
+    const commercialNoms = clientCommerciauxNoms(c);
+    return `<div class="fiche"${idx < list.length-1 ? ' style="page-break-after:always;"' : ''}>
+      <div class="fiche-brand">DOXAL</div>
+      <h1>Fiche de création de compte</h1>
+      <div class="fiche-row"><span class="fiche-label">Client</span><span class="fiche-value">${escapeHtml(c.nom||'—')}</span></div>
+      <div class="fiche-row"><span class="fiche-label">Secteur</span><span class="fiche-value">${escapeHtml(c.secteur||'—')}</span></div>
+      <div class="fiche-row"><span class="fiche-label">Zone</span><span class="fiche-value">${escapeHtml(c.zone||'—')}</span></div>
+      <div class="fiche-row"><span class="fiche-label">Téléphone</span><span class="fiche-value">${escapeHtml(c.telephone||'—')}</span></div>
+      <div class="fiche-row"><span class="fiche-label">Commercial</span><span class="fiche-value">${escapeHtml(commercialNoms||'non assigné')}</span></div>
+      <div class="fiche-box"><div class="fiche-box-label">Numéro de compte client</div><div class="fiche-box-blank"></div></div>
+    </div>`;
+  }).join('');
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Fiches — Comptes à créer</title>
+    <style>
+      body{font-family:sans-serif;color:#111;margin:0;padding:0;}
+      .fiche{padding:40px;box-sizing:border-box;min-height:100vh;}
+      .fiche-brand{font-size:13px;letter-spacing:2px;text-transform:uppercase;color:#888;margin-bottom:4px;}
+      h1{font-size:20px;margin:0 0 28px;}
+      .fiche-row{display:flex;border-bottom:1px solid #ddd;padding:10px 0;font-size:15px;}
+      .fiche-label{width:140px;color:#666;}
+      .fiche-value{font-weight:600;flex:1;}
+      .fiche-box{margin-top:32px;border:2px solid #333;border-radius:6px;padding:16px;}
+      .fiche-box-label{font-size:13px;color:#666;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;}
+      .fiche-box-blank{height:60px;border-bottom:1px dashed #999;}
+      @media print{ .fiche{page-break-inside:avoid;} }
+    </style>
+    </head><body>${fichesHTML}
+    <script>window.onload = function(){ setTimeout(function(){ window.print(); }, 200); };<\/script>
+    </body></html>`);
+  w.document.close();
+}
 /* ============================== SCANNER QR CODE EN DIRECT (CAMÉRA) ==============================
    Composant réutilisable : ouvre la caméra arrière du téléphone dans une fenêtre modale et décode
    les QR codes en continu — API native BarcodeDetector si disponible (Chrome Android), sinon la
@@ -4197,11 +4239,17 @@ function renderComptesAValider(content, user){
   const isAdv = user.role==='adv';
   content.innerHTML = `
     ${demoBannerHTML()}
-    <div class="page-head"><div><h1>Comptes à créer</h1><p class="page-sub">${isAdv?'Ventes enregistrées par les commerciaux en attente d\'un code client et de la création du compte (ADV).':'Ventes enregistrées par les commerciaux en attente de la création du compte par l\'ADV (lecture seule).'}</p></div></div>
+    <div class="page-head"><div><h1>Comptes à créer</h1><p class="page-sub">${isAdv?'Ventes enregistrées par les commerciaux en attente d\'un code client et de la création du compte (ADV).':'Ventes enregistrées par les commerciaux en attente de la création du compte par l\'ADV (lecture seule).'}</p></div>${isAdv?`<button class="btn sm" id="print-comptes-btn">${icon('pdf')} Imprimer la liste</button>`:''}</div>
     ${isAdv ? `<div class="banner" style="margin-bottom:14px;">Un client passe à l'état « actif » uniquement après qu'un code lui a été attribué ici. Tant qu'aucun code n'est créé, le commercial le voit comme « en attente ». Si une de ces ventes en attente fait doublon avec un client déjà existant, utilisez « Supprimer ce doublon » plutôt que de lui créer un compte.</div>` : ''}
     <div id="comptes-list"></div>
   `;
   wireDemoBanner(content);
+  const printComptesBtn = content.querySelector('#print-comptes-btn');
+  if(printComptesBtn) printComptesBtn.addEventListener('click', ()=>{
+    const printList = visibleClients().filter(c=>c.statut==='a_valider')
+      .sort((a,b)=> (a.venteEnAttenteDate||'') < (b.venteEnAttenteDate||'') ? 1 : -1);
+    printComptesAValiderPDF(printList);
+  });
   function apply(){
     const list = visibleClients().filter(c=>c.statut==='a_valider')
       .sort((a,b)=> (a.venteEnAttenteDate||'') < (b.venteEnAttenteDate||'') ? 1 : -1);

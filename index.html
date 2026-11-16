@@ -2798,8 +2798,11 @@ function renderAvecClient(box, content, user, commercialId, preselect){
     } else {
       cb.innerHTML = `<div class="empty-state" style="text-align:center;padding:24px 16px;">
         <div style="margin-bottom:10px;">${icon('camera')}</div>
-        <div style="margin-bottom:12px;">Scannez le QR code collé chez le client pour continuer.</div>
-        <button class="btn primary" id="fa-scan" type="button">${icon('camera')} Scanner le QR code du client</button>
+        <div style="margin-bottom:12px;">Scannez le QR code collé chez le client, ou choisissez-le dans la liste.</div>
+        <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+          <button class="btn primary" id="fa-scan" type="button">${icon('camera')} Scanner le QR code du client</button>
+          <button class="btn" id="fa-pick" type="button">${icon('db')} Choisir dans la liste</button>
+        </div>
       </div>`;
       cb.querySelector('#fa-scan').addEventListener('click', ()=>{
         openQrScanner({
@@ -2807,6 +2810,15 @@ function renderAvecClient(box, content, user, commercialId, preselect){
           hint: `Client accompagné : ${(APP.profils.get(commercialId)||{}).nom||''}`,
           validate: (c)=> clientHasCommercial(c, commercialId) ? true : 'Ce client ne fait pas partie du portefeuille de ce commercial.',
           onResult: (clientId, client)=>{ selected = client; renderClientBox(); renderRest(); },
+        });
+      });
+      cb.querySelector('#fa-pick').addEventListener('click', ()=>{
+        const eligible = [...APP.clients.values()].filter(c=>clientHasCommercial(c, commercialId));
+        openClientPickerModal({
+          title: 'Choisir un client',
+          hint: `Client accompagné : ${(APP.profils.get(commercialId)||{}).nom||''}`,
+          clients: eligible,
+          onSelect: (c)=>{ selected = c; renderClientBox(); renderRest(); },
         });
       });
     }
@@ -2957,14 +2969,25 @@ function renderSansClient(box, content, user, preselect){
     } else {
       cb.innerHTML = `<div class="empty-state" style="text-align:center;padding:24px 16px;">
         <div style="margin-bottom:10px;">${icon('camera')}</div>
-        <div style="margin-bottom:12px;">Scannez le QR code collé chez le client pour continuer.</div>
-        <button class="btn primary" id="fs-scan" type="button">${icon('camera')} Scanner le QR code du client</button>
+        <div style="margin-bottom:12px;">Scannez le QR code collé chez le client, ou choisissez-le dans la liste.</div>
+        <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+          <button class="btn primary" id="fs-scan" type="button">${icon('camera')} Scanner le QR code du client</button>
+          <button class="btn" id="fs-pick" type="button">${icon('db')} Choisir dans la liste</button>
+        </div>
       </div>`;
       cb.querySelector('#fs-scan').addEventListener('click', ()=>{
         openQrScanner({
           title: 'Scanner le QR code du client',
           validate: (c)=> c.statut==='actif' ? true : "Ce client n'est pas actif (prospect ou en attente de validation).",
           onResult: (clientId, client)=>{ selected = client; renderClientBox(); renderRest(); },
+        });
+      });
+      cb.querySelector('#fs-pick').addEventListener('click', ()=>{
+        const eligible = [...APP.clients.values()].filter(c=>c.statut==='actif');
+        openClientPickerModal({
+          title: 'Choisir un client',
+          clients: eligible,
+          onSelect: (c)=>{ selected = c; renderClientBox(); renderRest(); },
         });
       });
     }
@@ -3284,6 +3307,44 @@ function openPhotoPreviewModal(dataUrl, title){
   </div>`;
   document.body.appendChild(backdrop);
   backdrop.querySelector('[data-close]').addEventListener('click', ()=>backdrop.remove());
+}
+
+// Petite fenêtre de recherche permettant de choisir un client directement dans une liste
+// (nom, code, zone, téléphone), en alternative au scan du QR code chez le superviseur : le QR
+// code reste la méthode la plus rapide sur le terrain, mais n'est pas toujours disponible
+// (étiquette abîmée, perdue, ou client pas encore équipé) — cette fenêtre évite alors de bloquer
+// la fiche de suivi. `clients` doit déjà être filtré par l'appelant (portefeuille du commercial,
+// statut actif, etc.).
+function openClientPickerModal({title, hint, clients, onSelect}){
+  const backdrop = document.createElement('div'); backdrop.className='modal-backdrop';
+  backdrop.addEventListener('click', e=>{ if(e.target===backdrop) backdrop.remove(); });
+  backdrop.innerHTML = `<div class="modal" style="max-width:560px;">
+    <div class="modal-head"><h3>${escapeHtml(title||'Choisir un client')}</h3><button class="modal-close" data-close>${icon('x')}</button></div>
+    ${hint ? `<p class="helptext" style="margin:0 0 10px;">${escapeHtml(hint)}</p>` : ''}
+    <input type="text" id="cp-search" placeholder="Nom, code, zone ou téléphone…" style="width:100%;margin-bottom:10px;">
+    <div id="cp-list" style="max-height:360px;overflow-y:auto;"></div>
+  </div>`;
+  document.body.appendChild(backdrop);
+  backdrop.querySelector('[data-close]').addEventListener('click', ()=>backdrop.remove());
+
+  function normalizeSearch(s){ return String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''); }
+  const listBox = backdrop.querySelector('#cp-list');
+  function renderList(){
+    const q = normalizeSearch(backdrop.querySelector('#cp-search').value.trim());
+    const filtered = !q ? clients : clients.filter(c=> [c.nom, c.code, c.zone, c.secteur, c.telephone].some(v=> v && normalizeSearch(v).includes(q)));
+    if(!filtered.length){ listBox.innerHTML = `<div class="empty-state">Aucun client ne correspond.</div>`; return; }
+    listBox.innerHTML = filtered.slice(0, 200).map(c=>`<div data-pick="${c.id}" style="padding:10px 8px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+      <span><b>${escapeHtml(c.nom)}</b>${c.zone?' — '+escapeHtml(c.zone):(c.secteur?' — '+escapeHtml(c.secteur):'')}</span>
+      <span class="helptext">${c.telephone?escapeHtml(c.telephone):''}</span>
+    </div>`).join('');
+    listBox.querySelectorAll('[data-pick]').forEach(row=>row.addEventListener('click', ()=>{
+      const c = clients.find(x=>x.id===row.getAttribute('data-pick'));
+      backdrop.remove();
+      if(c) onSelect(c);
+    }));
+  }
+  backdrop.querySelector('#cp-search').addEventListener('input', renderList);
+  renderList();
 }
 
 function renderPricing(content, user){

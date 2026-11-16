@@ -1395,6 +1395,7 @@ function navFor(user){
       {r:'#/activite', l:'Activité générale', i:'journal'},
       {r:'#/prospection', l:'Suivi de la prospection', i:'userplus'},
       {r:'#/superviseurs', l:'Suivi des superviseurs', i:'clipboard'},
+      {r:'#/pricing-suivi', l:'Suivi du pricing marché', i:'tag'},
       {r:'#/equipe', l:'Vue équipe', i:'team'},
       {r:'#/dashboard', l:'Tableau de bord', i:'chart'},
       {r:'#/base-clients', l:'Base de données clients', i:'db'},
@@ -1410,6 +1411,7 @@ function navFor(user){
       {r:'#/activite', l:'Activité générale', i:'journal'},
       {r:'#/prospection', l:'Suivi de la prospection', i:'userplus'},
       {r:'#/superviseurs', l:'Suivi des superviseurs', i:'clipboard'},
+      {r:'#/pricing-suivi', l:'Suivi du pricing marché', i:'tag'},
       {r:'#/equipe', l:'Vue équipe', i:'team'},
       {r:'#/dashboard', l:'Tableau de bord', i:'chart'},
       {r:'#/base-clients', l:'Base de données clients', i:'db'},
@@ -1436,6 +1438,7 @@ const PAGE_TITLES = {
   '#/mes-stats':'Mes statistiques', '#/fiche':'Fiche de suivi superviseur', '#/journal':'Journal d\'activité superviseur', '#/pricing':'Pricing marché', '#/equipe':'Vue équipe',
   '#/dashboard':'Tableau de bord', '#/comptes':'Comptes à créer', '#/activite':'Activité générale', '#/prospection':'Suivi de la prospection',
   '#/superviseurs':'Suivi des superviseurs', '#/scan':'Scanner un client', '#/import-ventes':'Importer les ventes',
+  '#/pricing-suivi':'Suivi du pricing marché',
 };
 
 function renderShellHTML(user){
@@ -1526,6 +1529,7 @@ function renderRoute(content, user, route){
   if(route==='#/activite') return renderActiviteGenerale(content, user);
   if(route==='#/prospection') return renderSuiviProspection(content, user);
   if(route==='#/superviseurs') return renderSuiviSuperviseurs(content, user);
+  if(route==='#/pricing-suivi') return renderSuiviPricing(content, user);
   if(route==='#/scan') return renderScanClient(content, user);
   if(route==='#/import-ventes') return renderImportVentes(content, user);
   content.innerHTML = `<div class="empty-state">Page introuvable.</div>`;
@@ -3374,6 +3378,82 @@ function renderPricing(content, user){
   }
   wireDateRange(content, 'pz', applyRange);
   applyRange(periodCutoff(60), todayISO());
+}
+
+/* ============================== SUIVI DU PRICING MARCHÉ (DIRECTION / ADV) ============================== */
+// Vue en lecture seule pour la direction et l'ADV sur les relevés de prix saisis par les
+// superviseurs sur le terrain (page #/pricing) : aucune saisie ici, uniquement un aperçu
+// consolidé et filtrable (par superviseur, produit, période) de ce que chaque superviseur a
+// déjà relevé — pour que le pricing fait sur le terrain ne reste pas visible uniquement par
+// son auteur.
+function renderSuiviPricing(content, user){
+  const superviseurs = [...APP.profils.values()].filter(p=>p.role==='superviseur').sort((a,b)=> a.nom<b.nom?-1:1);
+  content.innerHTML = `
+    ${demoBannerHTML()}
+    <div class="page-head">
+      <div><h1>Suivi du pricing marché</h1><p class="page-sub">Relevés de prix photographiés par les superviseurs sur le terrain — produits, prix observés, fournisseurs.</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">${dateRangeHTML('spz', periodCutoff(30), todayISO())}</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+      <select id="spz-superviseur"><option value="">Tous les superviseurs</option>${superviseurs.map(p=>`<option value="${p.id}">${escapeHtml(p.nom)}</option>`).join('')}</select>
+      <input type="text" id="spz-produit" placeholder="Filtrer par produit…" style="flex:1;min-width:180px;">
+    </div>
+    <div class="kpi-grid" id="spz-kpis" style="margin-bottom:16px;"></div>
+    <div class="card"><div class="table-wrap" id="spz-list"></div></div>
+  `;
+  wireDemoBanner(content);
+
+  function apply(from, to){
+    const sinceISO = from!==undefined ? from : (content.querySelector('#spz-from').value||periodCutoff(30));
+    const toISO = to!==undefined ? to : (content.querySelector('#spz-to').value||todayISO());
+    const supFilter = content.querySelector('#spz-superviseur').value;
+    const produitFilter = (content.querySelector('#spz-produit').value||'').trim().toLowerCase();
+
+    const rows = [...APP.relevesPrix.values()]
+      .filter(r=>r.date>=sinceISO && r.date<=toISO)
+      .filter(r=>!supFilter || r.superviseurId===supFilter)
+      .filter(r=>!produitFilter || (r.produit||'').toLowerCase().includes(produitFilter))
+      .sort((a,b)=> (a.timestamp||'') < (b.timestamp||'') ? 1 : -1);
+
+    const supActifs = new Set(rows.map(r=>r.superviseurId)).size;
+    const produitsDistincts = new Set(rows.map(r=>r.produit)).size;
+    const dernier = rows.length ? rows[0].date : null;
+
+    content.querySelector('#spz-kpis').innerHTML = `
+      <div class="kpi-tile"><div class="kpi-label">Relevés sur la période</div><div class="kpi-value">${rows.length}</div></div>
+      <div class="kpi-tile"><div class="kpi-label">Superviseurs ayant relevé</div><div class="kpi-value">${supActifs}</div><div class="kpi-sub">sur ${superviseurs.length} au total</div></div>
+      <div class="kpi-tile"><div class="kpi-label">Produits suivis</div><div class="kpi-value">${produitsDistincts}</div></div>
+      <div class="kpi-tile"><div class="kpi-label">Dernier relevé</div><div class="kpi-value" style="font-size:17px;">${dernier?fmtDateFR(dernier):'—'}</div></div>
+    `;
+
+    const listBox = content.querySelector('#spz-list');
+    if(!rows.length){ listBox.innerHTML = `<div class="empty-state">Aucun relevé de prix sur cette période.</div>`; return; }
+    listBox.innerHTML = `<table>
+      <thead><tr><th></th><th>Produit</th><th>Prix</th><th>Fournisseur</th><th>Superviseur</th><th>Date</th><th>Notes</th></tr></thead>
+      <tbody>${rows.map(r=>{
+        const sup = APP.profils.get(r.superviseurId);
+        return `<tr data-releve="${r.id}">
+          <td>${r.photo ? `<img src="${r.photo}" class="pricing-thumb" data-photo="${r.id}">` : '—'}</td>
+          <td><b>${escapeHtml(r.produit)}</b></td>
+          <td class="num">${fmtNum(r.prix)} FCFA</td>
+          <td>${escapeHtml(r.fournisseur)}</td>
+          <td>${sup?escapeHtml(sup.nom):'—'}</td>
+          <td>${fmtDateFR(r.date)}</td>
+          <td class="helptext">${escapeHtml(r.notes||'—')}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+    listBox.querySelectorAll('[data-photo]').forEach(im=>{
+      im.addEventListener('click', ()=>{
+        const r = APP.relevesPrix.get(im.getAttribute('data-photo'));
+        if(r) openPhotoPreviewModal(r.photo, r.produit);
+      });
+    });
+  }
+  content.querySelector('#spz-superviseur').addEventListener('change', ()=>apply());
+  content.querySelector('#spz-produit').addEventListener('input', ()=>apply());
+  wireDateRange(content, 'spz', apply);
+  apply(periodCutoff(30), todayISO());
 }
 
 /* ============================== VUE ÉQUIPE (SUPERVISEUR) ============================== */

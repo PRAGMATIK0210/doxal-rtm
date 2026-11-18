@@ -1976,7 +1976,7 @@ async function exportTourneePDF(dateISO, user, dayVisites){
       const c = APP.clients.get(v.clientId);
       const heure = v.timestamp ? (fmtDateTimeFR(v.timestamp).split(' ')[1]||'') : '';
       const detail = visiteMontantCell(v);
-      const pos = v.gps ? v.gps.distanceM+' m' : '—';
+      const pos = v.gps ? (v.gps.distanceM!=null ? v.gps.distanceM+' m' : 'Capturée') : '—';
       doc.text(String(heure), marginX, y);
       doc.text(String(c?c.nom:'—').slice(0,26), marginX+55, y);
       doc.text(String(c?c.zone:'—'), marginX+195, y);
@@ -2388,7 +2388,7 @@ function renderVisitForm(box, c, user, existing, backdrop){
       : "Passage enregistré · en attente de l'import des ventes du jour par l'ADV";
     box.innerHTML = `<div class="status-pill ${cls}" style="display:inline-block;margin-bottom:8px;">${label}</div>
       <p class="helptext">Passage déjà enregistré aujourd'hui à ${fmtDateTimeFR(existing.timestamp).split(' ')[1]||''}.
-      ${existing.gps ? ' Position à '+existing.gps.distanceM+' m du client.' : ''}</p>`;
+      ${existing.gps ? (existing.gps.distanceM!=null ? ' Position à '+existing.gps.distanceM+' m du client.' : ' Position capturée (distance non calculée).') : ''}</p>`;
     return;
   }
   // Un client déjà actif a un code ERP : ses ventes seront détectées automatiquement ce soir à
@@ -2429,16 +2429,26 @@ function renderVisitForm(box, c, user, existing, backdrop){
   function renderGpsBox(){
     const gb = box.querySelector('#gps-box');
     if(!gb) return;
+    // Beaucoup de clients (notamment ceux importés depuis Excel) n'ont jamais eu leur position
+    // exacte confirmée sur place : ils portent encore le point générique du secteur attribué par
+    // défaut (clientPositionIsFallback). Comparer une position GPS réelle à ce point générique ne
+    // mesure rien d'utile et déclenchait à tort des alertes « visite à distance » même quand le
+    // commercial (ou le superviseur qui l'accompagne) est bien chez le client — on ne calcule donc
+    // la distance que si ce client a déjà une position confirmée.
+    const hasRef = !clientPositionIsFallback(c);
     gb.innerHTML = `
-      ${gps ? `<b>${gps.distanceM<=300?'✓ Position confirmée':'⚠ Visite à distance'}</b> · ${gps.distanceM} m du client enregistré${gps.distanceM>300?' — ce passage sera signalé comme « à distance » à l\'ADV et à la direction.':''}`
+      ${gps ? (!hasRef ? `<b>✓ Position capturée</b> · position de ce point de vente non confirmée en base — distance non calculée.`
+            : `<b>${gps.distanceM<=300?'✓ Position confirmée':'⚠ Visite à distance'}</b> · ${gps.distanceM} m du client enregistré${gps.distanceM>300?' — ce passage sera signalé comme « à distance » à l\'ADV et à la direction.':''}`)
             : `Localisation en cours pour confirmer la visite…`}
       <div style="margin-top:6px;"><button class="btn sm" id="gps-btn">${icon('pin')} ${gps?'Revérifier':'Vérifier'} ma position</button></div>
     `;
     gb.querySelector('#gps-btn').addEventListener('click', ()=>{
       const btn = gb.querySelector('#gps-btn'); btn.disabled = true; btn.textContent='Localisation…';
       getPositionWithFallback(pos=>{
-        const dist = Math.round(haversineM(pos.coords.latitude, pos.coords.longitude, c.lat, c.lng));
-        gps = {lat: pos.coords.latitude, lng: pos.coords.longitude, distanceM: dist};
+        gps = {lat: pos.coords.latitude, lng: pos.coords.longitude};
+        if(hasRef){
+          gps.distanceM = Math.round(haversineM(pos.coords.latitude, pos.coords.longitude, c.lat, c.lng));
+        }
         renderGpsBox();
       }, err=>{
         toast('Position indisponible ('+(err.message||'refusée')+'). Vous pouvez continuer sans GPS.', 'warning');
@@ -2529,16 +2539,26 @@ function renderVisitFormSimplifie(box, c, user, backdrop){
   function renderGpsBox(){
     const gb = box.querySelector('#gps-box');
     if(!gb) return;
+    // Beaucoup de clients (notamment ceux importés depuis Excel) n'ont jamais eu leur position
+    // exacte confirmée sur place : ils portent encore le point générique du secteur attribué par
+    // défaut (clientPositionIsFallback). Comparer une position GPS réelle à ce point générique ne
+    // mesure rien d'utile et déclenchait à tort des alertes « visite à distance » même quand le
+    // commercial (ou le superviseur qui l'accompagne) est bien chez le client — on ne calcule donc
+    // la distance que si ce client a déjà une position confirmée.
+    const hasRef = !clientPositionIsFallback(c);
     gb.innerHTML = `
-      ${gps ? `<b>${gps.distanceM<=300?'✓ Position confirmée':'⚠ Visite à distance'}</b> · ${gps.distanceM} m du client enregistré${gps.distanceM>300?' — ce passage sera signalé comme « à distance » à l\'ADV et à la direction.':''}`
+      ${gps ? (!hasRef ? `<b>✓ Position capturée</b> · position de ce point de vente non confirmée en base — distance non calculée.`
+            : `<b>${gps.distanceM<=300?'✓ Position confirmée':'⚠ Visite à distance'}</b> · ${gps.distanceM} m du client enregistré${gps.distanceM>300?' — ce passage sera signalé comme « à distance » à l\'ADV et à la direction.':''}`)
             : `Localisation en cours pour confirmer la visite…`}
       <div style="margin-top:6px;"><button class="btn sm" id="gps-btn">${icon('pin')} ${gps?'Revérifier':'Vérifier'} ma position</button></div>
     `;
     gb.querySelector('#gps-btn').addEventListener('click', ()=>{
       const btn = gb.querySelector('#gps-btn'); btn.disabled = true; btn.textContent='Localisation…';
       getPositionWithFallback(pos=>{
-        const dist = Math.round(haversineM(pos.coords.latitude, pos.coords.longitude, c.lat, c.lng));
-        gps = {lat: pos.coords.latitude, lng: pos.coords.longitude, distanceM: dist};
+        gps = {lat: pos.coords.latitude, lng: pos.coords.longitude};
+        if(hasRef){
+          gps.distanceM = Math.round(haversineM(pos.coords.latitude, pos.coords.longitude, c.lat, c.lng));
+        }
         renderGpsBox();
       }, err=>{
         toast('Position indisponible ('+(err.message||'refusée')+'). Vous pouvez continuer sans GPS.', 'warning');
@@ -2694,15 +2714,20 @@ function buildProduitsChecklist(container){
 }
 function wireGpsCapture(box, btnSel, boxSel, clientRef){
   // clientRef (facultatif) : client déjà existant dont la position (lat/lng) est enregistrée.
-  // Quand il est fourni, on calcule la distance entre la position captée et celle du client,
-  // exactement comme pour le passage commercial, afin de détecter une éventuelle visite à distance.
+  // Quand il est fourni ET que cette position a déjà été confirmée sur place (donc différente du
+  // point générique du secteur attribué par défaut aux clients jamais géolocalisés précisément —
+  // voir clientPositionIsFallback), on calcule la distance entre la position captée et celle du
+  // client, exactement comme pour le passage commercial, afin de détecter une éventuelle visite à
+  // distance. Sans position de référence fiable, on ne calcule rien : sinon un superviseur réellement
+  // sur place avec le commercial se voyait signalé à tort comme « à distance », simplement parce que
+  // le client lui-même n'avait jamais eu sa position exacte enregistrée.
   let gps = { value: null };
   box.querySelector(btnSel).addEventListener('click', ()=>{
     const btn = box.querySelector(btnSel);
     btn.disabled = true; btn.textContent = 'Localisation…';
     getPositionWithFallback(pos=>{
       gps.value = {lat:pos.coords.latitude, lng:pos.coords.longitude};
-      if(clientRef && clientRef.lat!=null && clientRef.lng!=null){
+      if(clientRef && clientRef.lat!=null && clientRef.lng!=null && !clientPositionIsFallback(clientRef)){
         gps.value.distanceM = Math.round(haversineM(pos.coords.latitude, pos.coords.longitude, clientRef.lat, clientRef.lng));
       }
       box.querySelector(boxSel).innerHTML = positionBadge(gps.value);
@@ -2850,7 +2875,7 @@ function renderAvecClient(box, content, user, commercialId, preselect){
     const v = visiteToday(c.id, commercialId);
     rest.innerHTML = `
       <div id="fa-detect" class="gps-box" style="margin-top:12px;">
-        ${v ? `<span class="status-pill good">✓ Passage confirmé aujourd'hui</span> à ${fmtDateTimeFR(v.timestamp).split(' ')[1]||''}${v.gps?' · position à '+v.gps.distanceM+' m':''}`
+        ${v ? `<span class="status-pill good">✓ Passage confirmé aujourd'hui</span> à ${fmtDateTimeFR(v.timestamp).split(' ')[1]||''}${v.gps?(v.gps.distanceM!=null?' · position à '+v.gps.distanceM+' m':' · position capturée'):''}`
             : `<span class="status-pill critical">✗ Aucun passage enregistré aujourd'hui pour ce client</span>`}
       </div>
       <div class="field" style="margin-top:12px;">Produits présents en rayon

@@ -1066,6 +1066,11 @@ function myProspects(commercialId){
   return visibleClients().filter(c=>clientHasCommercial(c, commercialId) && c.statut==='prospect');
 }
 function responsibleCommercialForZone(zone){
+  // Priorité à un commercial dont la liste de zones personnelle couvre explicitement cette zone :
+  // plus précis que le secteur, utile quand plusieurs commerciaux partagent le même secteur ou
+  // quand un commercial couvre des zones situées dans des secteurs différents.
+  const byOwnZones = [...APP.profils.values()].find(p=>p.role==='commercial' && Array.isArray(p.zones) && p.zones.includes(zone));
+  if(byOwnZones) return byOwnZones;
   const secteur = secteurForZone(zone);
   if(!secteur) return null;
   return [...APP.profils.values()].find(p=>p.role==='commercial' && p.secteur===secteur) || null;
@@ -2219,7 +2224,7 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
   const editInfosBtn = backdrop.querySelector('#edit-infos');
   if(editInfosBtn) editInfosBtn.addEventListener('click', ()=>{
     const box = backdrop.querySelector('#infos-edit-box');
-    const zoneOpts = zonesForSecteur(c.secteur);
+    const zoneOpts = zonesForCommercial(user);
     let gpsCaptured = null;
     function renderCiGpsBox(){
       const gpsBox = box.querySelector('#ci-gps-box');
@@ -2918,7 +2923,7 @@ function renderAvecClient(box, content, user, commercialId, preselect){
 function renderAvecProspect(box, content, user, commercialId){
   const commercial = APP.profils.get(commercialId);
   const secteur = commercial ? commercial.secteur : null;
-  const zones = secteur ? zonesForSecteur(secteur) : [];
+  const zones = zonesForCommercial(commercial);
   box.innerHTML = `
     <div class="banner" style="margin-bottom:14px;">Ce prospect sera transmis directement à <b>${commercial?escapeHtml(commercial.nom):'—'}</b>, le commercial que vous accompagnez.</div>
     <div class="form-grid">
@@ -4017,6 +4022,14 @@ function secteurForZone(zone){
 function zonesForSecteur(secteur){
   return secteur && SECTEURS_DATA[secteur] ? SECTEURS_DATA[secteur].zones : [];
 }
+// Zones proposées pour un commercial donné : sa propre liste de zones si elle a été renseignée
+// (portefeuille zone par zone, plus précis que le secteur entier — et pouvant au besoin déborder
+// du découpage secteur habituel), sinon la liste complète des zones du secteur auquel il est
+// rattaché, comme avant pour tous les commerciaux qui n'ont pas de liste personnalisée.
+function zonesForCommercial(commercial){
+  if(commercial && Array.isArray(commercial.zones) && commercial.zones.length) return commercial.zones;
+  return zonesForSecteur(commercial ? commercial.secteur : null);
+}
 
 function secteursForEquipe(user){
   return [...new Set((user.equipe||[]).map(id=>APP.profils.get(id)).filter(Boolean).map(p=>p.secteur))];
@@ -4102,7 +4115,7 @@ function renderTourneeAujourdhui(body, user){
 }
 
 function renderTourneeProspecter(body, user){
-  const zones = zonesForSecteur(user.secteur);
+  const zones = zonesForCommercial(user);
   body.innerHTML = `
     <div class="banner" style="margin-bottom:14px;">Vous avez repéré un nouveau point de vente ? Enregistrez-le ici. Il apparaît comme prospect dans votre « Historique de prospection » ; dès que vous y enregistrez une première vente, le dossier est transmis à l'ADV, qui crée le compte client définitif (avec un code client).</div>
     <div class="card" style="max-width:640px;">

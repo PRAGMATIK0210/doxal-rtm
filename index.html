@@ -2413,27 +2413,38 @@ function renderVisitForm(box, c, user, existing, backdrop){
       </div>
       <div id="lines-box"></div>
       <div id="raison-box"></div>
-      <div class="gps-box" id="gps-box" style="margin:10px 0;">
-        ${gps ? `<b>${gps.distanceM<=300?'✓ Position confirmée':'⚠ Visite à distance'}</b> · ${gps.distanceM} m du client enregistré${gps.distanceM>300?' — ce passage sera signalé comme « à distance » à l\'ADV et à la direction.':''}`
-              : `Localisation en cours pour confirmer la visite…`}
-        <div style="margin-top:6px;"><button class="btn sm" id="gps-btn">${icon('pin')} ${gps?'Revérifier':'Vérifier'} ma position</button></div>
-      </div>
+      <div class="gps-box" id="gps-box" style="margin:10px 0;"></div>
       <button class="btn primary" id="submit-visit" style="width:100%;justify-content:center;">Enregistrer le passage</button>
     `;
     box.querySelectorAll('[data-v]').forEach(b=>b.addEventListener('click', ()=>{ vendu = b.getAttribute('data-v')==='1'; renderInner(); }));
-    box.querySelector('#gps-btn').addEventListener('click', ()=>{
-      const btn = box.querySelector('#gps-btn'); btn.disabled = true; btn.textContent='Localisation…';
+    renderGpsBox();
+    if(vendu) renderProduitsVendus(); else renderRaison();
+    box.querySelector('#submit-visit').addEventListener('click', ()=>submitVisit());
+  }
+  // Ne redessine que ce petit bloc de statut GPS, jamais tout le formulaire : la localisation
+  // (jusqu'à 9 s, souvent plus lente en boutique) se termine en arrière-plan pendant que le
+  // commercial a déjà commencé à cocher des produits ou saisir le montant. Reconstruire tout le
+  // formulaire à ce moment-là lui faisait perdre le focus/clavier en plein milieu de sa saisie,
+  // ce qui donnait l'impression que « la page sautait en arrière ».
+  function renderGpsBox(){
+    const gb = box.querySelector('#gps-box');
+    if(!gb) return;
+    gb.innerHTML = `
+      ${gps ? `<b>${gps.distanceM<=300?'✓ Position confirmée':'⚠ Visite à distance'}</b> · ${gps.distanceM} m du client enregistré${gps.distanceM>300?' — ce passage sera signalé comme « à distance » à l\'ADV et à la direction.':''}`
+            : `Localisation en cours pour confirmer la visite…`}
+      <div style="margin-top:6px;"><button class="btn sm" id="gps-btn">${icon('pin')} ${gps?'Revérifier':'Vérifier'} ma position</button></div>
+    `;
+    gb.querySelector('#gps-btn').addEventListener('click', ()=>{
+      const btn = gb.querySelector('#gps-btn'); btn.disabled = true; btn.textContent='Localisation…';
       getPositionWithFallback(pos=>{
         const dist = Math.round(haversineM(pos.coords.latitude, pos.coords.longitude, c.lat, c.lng));
         gps = {lat: pos.coords.latitude, lng: pos.coords.longitude, distanceM: dist};
-        renderInner();
+        renderGpsBox();
       }, err=>{
         toast('Position indisponible ('+(err.message||'refusée')+'). Vous pouvez continuer sans GPS.', 'warning');
-        renderInner();
+        renderGpsBox();
       });
     });
-    if(vendu) renderProduitsVendus(); else renderRaison();
-    box.querySelector('#submit-visit').addEventListener('click', ()=>submitVisit());
   }
   function renderProduitsVendus(){
     const lb = box.querySelector('#lines-box');
@@ -2507,25 +2518,33 @@ function renderVisitFormSimplifie(box, c, user, backdrop){
   function renderInner(){
     box.innerHTML = `
       <div class="helptext" style="margin-bottom:10px;">Ce client a déjà un compte actif : il suffit d'enregistrer votre passage. Les ventes du jour seront automatiquement rattachées ce soir, après l'import des factures par l'ADV — plus besoin de ressaisir le montant ou les produits.</div>
-      <div class="gps-box" id="gps-box" style="margin:10px 0;">
-        ${gps ? `<b>${gps.distanceM<=300?'✓ Position confirmée':'⚠ Visite à distance'}</b> · ${gps.distanceM} m du client enregistré${gps.distanceM>300?' — ce passage sera signalé comme « à distance » à l\'ADV et à la direction.':''}`
-              : `Localisation en cours pour confirmer la visite…`}
-        <div style="margin-top:6px;"><button class="btn sm" id="gps-btn">${icon('pin')} ${gps?'Revérifier':'Vérifier'} ma position</button></div>
-      </div>
+      <div class="gps-box" id="gps-box" style="margin:10px 0;"></div>
       <button class="btn primary" id="submit-visit" style="width:100%;justify-content:center;">Enregistrer le passage</button>
     `;
-    box.querySelector('#gps-btn').addEventListener('click', ()=>{
-      const btn = box.querySelector('#gps-btn'); btn.disabled = true; btn.textContent='Localisation…';
+    renderGpsBox();
+    box.querySelector('#submit-visit').addEventListener('click', ()=>submitVisitSimplifie());
+  }
+  // Même raison que dans renderVisitForm : on isole le rafraîchissement du statut GPS pour ne
+  // pas reconstruire tout le formulaire (et donc perdre le focus) pendant que le commercial agit.
+  function renderGpsBox(){
+    const gb = box.querySelector('#gps-box');
+    if(!gb) return;
+    gb.innerHTML = `
+      ${gps ? `<b>${gps.distanceM<=300?'✓ Position confirmée':'⚠ Visite à distance'}</b> · ${gps.distanceM} m du client enregistré${gps.distanceM>300?' — ce passage sera signalé comme « à distance » à l\'ADV et à la direction.':''}`
+            : `Localisation en cours pour confirmer la visite…`}
+      <div style="margin-top:6px;"><button class="btn sm" id="gps-btn">${icon('pin')} ${gps?'Revérifier':'Vérifier'} ma position</button></div>
+    `;
+    gb.querySelector('#gps-btn').addEventListener('click', ()=>{
+      const btn = gb.querySelector('#gps-btn'); btn.disabled = true; btn.textContent='Localisation…';
       getPositionWithFallback(pos=>{
         const dist = Math.round(haversineM(pos.coords.latitude, pos.coords.longitude, c.lat, c.lng));
         gps = {lat: pos.coords.latitude, lng: pos.coords.longitude, distanceM: dist};
-        renderInner();
+        renderGpsBox();
       }, err=>{
         toast('Position indisponible ('+(err.message||'refusée')+'). Vous pouvez continuer sans GPS.', 'warning');
-        renderInner();
+        renderGpsBox();
       });
     });
-    box.querySelector('#submit-visit').addEventListener('click', ()=>submitVisitSimplifie());
   }
   async function submitVisitSimplifie(){
     if(!APP.db) return;

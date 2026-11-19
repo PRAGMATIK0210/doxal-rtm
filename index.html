@@ -4295,7 +4295,7 @@ async function exportClientsQrPDF(clients, triggerBtn){
   try{
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({unit:'pt', format:'a4'});
-    const marginX = 36, marginY = 40, cols = 3, cellW = 170, cellH = 190, qrSize = 120;
+    const marginX = 36, marginY = 40, cols = 3, cellW = 170, cellH = 205, qrSize = 120;
     let x = marginX, y = marginY, col = 0;
     doc.setFont('helvetica','bold'); doc.setFontSize(14);
     doc.text('DOXAL — Feuille de QR codes clients', marginX, 24);
@@ -4314,15 +4314,26 @@ async function exportClientsQrPDF(clients, triggerBtn){
       const dataUrl = dataUrls[idx];
       // Nom du client en haut de la vignette, QR code au milieu, initiales du commercial en bas —
       // l'étiquette se lit ainsi du nom vers le QR une fois découpée et collée chez le client.
+      // Le nom peut passer sur 2 lignes (noms de points de vente souvent longs) : on calcule le
+      // nombre de lignes réellement utilisées pour décaler le QR code d'autant en dessous — avant,
+      // la 2e ligne du nom venait se superposer aux premières barres du QR code.
       doc.setFont('helvetica','bold'); doc.setFontSize(11);
-      doc.text(String(c.nom||'').slice(0,26), x + cellW/2, y + 12, {align:'center', maxWidth: cellW-6});
+      const nameLineHeight = 11 * doc.getLineHeightFactor();
+      let nameLines = doc.splitTextToSize(String(c.nom||'').slice(0,60), cellW-6);
+      if(nameLines.length > 2){
+        let last = nameLines[1];
+        while(last.length > 1 && doc.getTextWidth(last.replace(/\s+$/,'') + '…') > cellW-6){ last = last.slice(0, -1); }
+        nameLines = [nameLines[0], last.replace(/\s+$/,'') + '…'];
+      }
+      doc.text(nameLines, x + cellW/2, y + 12, {align:'center'});
+      const qrY = y + 12 + nameLines.length * nameLineHeight + 6;
       // Compression 'SLOW' : sans elle, jsPDF stocke chaque QR en bitmap brut non compressé
       // (~270 Ko par QR, soit plus de 150 Mo pour une feuille de 600 clients) — avec elle, on
       // retombe à la taille normale d'un PNG (quelques Ko par QR), fichier utilisable et
       // partageable, sans perte de lisibilité du QR code.
-      if(dataUrl){ try{ doc.addImage(dataUrl, 'PNG', x + (cellW-qrSize)/2, y + 20, qrSize, qrSize, undefined, 'SLOW'); }catch(e){} }
+      if(dataUrl){ try{ doc.addImage(dataUrl, 'PNG', x + (cellW-qrSize)/2, qrY, qrSize, qrSize, undefined, 'SLOW'); }catch(e){} }
       doc.setFont('helvetica','normal'); doc.setFontSize(9);
-      doc.text(clientCommerciauxInitiales(c) || '', x + cellW/2, y + 20 + qrSize + 16, {align:'center'});
+      doc.text(clientCommerciauxInitiales(c) || '', x + cellW/2, qrY + qrSize + 16, {align:'center'});
       col++;
       if(col>=cols){ col=0; x = marginX; y += cellH; }
       else { x += cellW; }

@@ -4065,6 +4065,53 @@ async function exportExcel(){
   }
 }
 
+async function exportClientsKML(clients){
+  // Génère un fichier KML (format carte natif de Google) à importer dans Google My Maps
+  // (mymaps.google.com → Importer) pour visualiser tous les points de vente sur une carte
+  // partageable. Les clients sont regroupés par secteur en dossiers KML distincts, ce qui
+  // devient autant de calques séparés à l'import dans My Maps (plus lisible, et ça évite la
+  // limite de 2000 points par calque imposée par Google sur un très gros fichier unique).
+  if(!APP.downloads){ toast("Export indisponible dans ce navigateur.", 'warning'); return; }
+  try{
+    const withGps = clients.filter(c=> c.lat!=null && c.lng!=null);
+    function equipementLabel(c){
+      const parts = [];
+      if(c.vitrine) parts.push('Vitrine');
+      (c.congelateurs||[]).forEach(cap=>parts.push(`Congélateur ${cap}L`));
+      return parts.join(', ') || (c.aFrigo ? 'Frigo' : '');
+    }
+    function statutLabel(c){
+      if(c.statut==='prospect') return 'Prospect';
+      if(c.statut==='a_valider') return 'En attente ADV';
+      return 'Actif';
+    }
+    const bySecteur = new Map();
+    withGps.forEach(c=>{ const sec = c.secteur || 'Sans secteur'; if(!bySecteur.has(sec)) bySecteur.set(sec, []); bySecteur.get(sec).push(c); });
+    const folders = [...bySecteur.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([sec, list])=>{
+      const placemarks = list.map(c=>{
+        const desc = [
+          c.code ? `Code : ${c.code}` : '',
+          `Statut : ${statutLabel(c)}`,
+          c.zone ? `Zone : ${c.zone}` : '',
+          c.telephone ? `Téléphone : ${c.telephone}` : '',
+          c.adresse ? `Adresse : ${c.adresse}` : '',
+          equipementLabel(c) ? `Équipement : ${equipementLabel(c)}` : '',
+          clientCommerciauxNoms(c) ? `Commercial : ${clientCommerciauxNoms(c)}` : '',
+        ].filter(Boolean).join('\n');
+        return `<Placemark><name>${escapeHtml(c.nom)}</name><description>${escapeHtml(desc)}</description><Point><coordinates>${c.lng},${c.lat},0</coordinates></Point></Placemark>`;
+      }).join('');
+      return `<Folder><name>${escapeHtml(sec)} (${list.length})</name>${placemarks}</Folder>`;
+    }).join('');
+    const kml = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>Clients DOXAL RTM - ${todayISO()}</name>${folders}</Document></kml>`;
+    const blob = new Blob([kml], {type:'application/vnd.google-earth.kml+xml'});
+    await APP.downloads.save({filename:`clients-google-maps-${todayISO()}.kml`, data: blob});
+    toast(`Fichier KML enregistré (${withGps.length} clients).`, 'good');
+  }catch(e){
+    if(e && e.code==='declined'){ /* silent */ }
+    else { console.error(e); toast('Export impossible : '+(e && e.message ? e.message : 'erreur inconnue'), 'critical'); }
+  }
+}
+
 
 /* ============================== DIRECTION / PROSPECTION — NOUVELLES FONCTIONS ============================== */
 function myAValider(commercialId){
@@ -4455,6 +4502,7 @@ function renderClientsCarte(content, user){
         <select id="filter-secteur"><option value="">Tous les secteurs</option>${SECTEUR_NAMES.map(s=>`<option>${escapeHtml(s)}</option>`).join('')}</select>
         <select id="filter-statut"><option value="">Statut : tous</option><option value="actif">Clients actifs</option><option value="prospect">Prospects</option></select>
         <select id="filter-frigo"><option value="">Frigo : tous</option><option value="1">Avec frigo</option><option value="0">Sans frigo</option></select>
+        <button class="btn" id="carte-export-kml">${icon('map')} Exporter vers Google Maps</button>
       </div>
     </div>
     <div class="grid-2">
@@ -4474,6 +4522,7 @@ function renderClientsCarte(content, user){
   content.querySelector('#filter-secteur').addEventListener('change', apply);
   content.querySelector('#filter-statut').addEventListener('change', apply);
   content.querySelector('#filter-frigo').addEventListener('change', apply);
+  content.querySelector('#carte-export-kml').addEventListener('click', ()=> exportClientsKML(list));
   apply();
 }
 

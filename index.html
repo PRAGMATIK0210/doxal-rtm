@@ -1474,19 +1474,14 @@ function navFor(user){
   }
   if(user.role==='adv'){
     // L'ADV administre l'ensemble de l'outil et doit pouvoir, pour des démonstrations ou pour
-    // dépanner une équipe, accéder à tous les écrans normalement réservés aux commerciaux
-    // (tournée, historique, prospection, stats) et aux superviseurs (fiche de suivi, journal,
-    // pricing), en plus de ses propres écrans de pilotage global.
+    // dépanner une équipe, accéder à l'essentiel des écrans des commerciaux (visiter un client ou
+    // prospecter, via « Ma tournée du jour ») et des superviseurs (faire un pricing), en plus de ses
+    // propres écrans de pilotage global.
     return [
       {r:'#/scan', l:'Scanner un client', i:'camera'},
       {r:'#/import-ventes', l:'Importer les ventes', i:'download'},
       {r:'#/comptes', l:'Comptes à créer', i:'idcard'},
       {r:'#/tournee', l:'Ma tournée du jour', i:'route'},
-      {r:'#/prospects', l:'Historique de prospection', i:'userplus'},
-      {r:'#/historique', l:'Historique des tournées', i:'history'},
-      {r:'#/mes-stats', l:'Mes statistiques', i:'chart'},
-      {r:'#/fiche', l:'Fiche de suivi', i:'clipboard'},
-      {r:'#/journal', l:'Journal d\'activité', i:'journal'},
       {r:'#/pricing', l:'Pricing marché', i:'tag'},
       {r:'#/activite', l:'Activité générale', i:'journal'},
       {r:'#/prospection', l:'Suivi de la prospection', i:'userplus'},

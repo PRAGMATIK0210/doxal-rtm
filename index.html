@@ -717,6 +717,13 @@ const RAISONS_NON_ACHAT = [
   "Pas de besoin actuellement","Problème de paiement / crédit","Autre"
 ];
 const JOURS_FR = ["Dimanche","Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi"];
+// Équipement froid chez le client : une vitrine (toujours le même objectif) et/ou un ou plusieurs
+// congélateurs, chacun avec sa propre capacité — plus un congélateur est grand, plus l'objectif
+// mensuel qui lui est associé est élevé. Un même client peut cumuler plusieurs congélateurs : leurs
+// objectifs s'additionnent alors (plus de capacité de stockage disponible = objectif plus élevé).
+const CAPACITES_CONGELATEUR = [200, 300, 400, 500];
+const OBJECTIF_VITRINE = 150000;
+const OBJECTIF_PAR_CAPACITE_CONGELATEUR = {200:150000, 300:150000, 400:200000, 500:300000};
 /* Liste de concurrents à adapter à votre marché — modifiable ici pour alimenter la liste déroulante
    du superviseur lors de l'identification de la concurrence en boutique (le commercial n'a pas à
    identifier de concurrent : on garde son travail simple, ce relevé relève du superviseur). */
@@ -1152,10 +1159,12 @@ function realizedForClientMonth(clientId, ym){
     .reduce((s,v)=>s+(v.montantTotal||0),0);
 }
 function suggestObjective(clientId){
-  // Les clients équipés d'un frigo ont un objectif fixe (et non calculé sur l'historique) :
-  // 150 000 FCFA par mois, quel que soit leur volume d'achats passé.
+  // Les clients équipés d'une vitrine et/ou d'un ou plusieurs congélateurs ont un objectif fixe
+  // (et non calculé sur l'historique), basé sur leur équipement plutôt que sur leur volume d'achats
+  // passé : voir frigoEquipementObjectif() (vitrine + somme des congélateurs selon leur capacité).
   const frigoClient = APP.clients.get(clientId);
-  if(frigoClient && frigoClient.aFrigo) return 150000;
+  const frigoObjectifClient = frigoEquipementObjectif(frigoClient);
+  if(frigoObjectifClient > 0) return frigoObjectifClient;
   // Objectif lissé sur l'historique des achats du client : lissage exponentiel sur les 6 derniers
   // mois (les mois les plus récents pèsent davantage), avec une marge de progression de +10%.
   const now = todayDate();
@@ -2117,10 +2126,11 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
     <div class="card" style="padding:12px 14px;">
       <div class="card-head" style="margin-bottom:8px;">
         <div class="card-title">Équipement frigo</div>
-        ${(readOnlyViewer || scanMode || c.archive) ? '' : `<button class="btn sm" id="toggle-frigo">${c.aFrigo?'Retirer le frigo':'Marquer équipé d\'un frigo'}</button>`}
+        ${(readOnlyViewer || scanMode || c.archive) ? '' : `<button class="btn ghost sm" id="edit-frigo">Modifier</button>`}
       </div>
-      <span class="frigo-badge" style="${c.aFrigo?'':'opacity:.4'}">${icon('fridge')} ${c.aFrigo?'Client équipé':'Pas de frigo'}</span>
+      ${hasFrigoEquipement(c) ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">${frigoEquipementBadgesHtml(c)}</div>` : `<span class="frigo-badge" style="opacity:.4;">${icon('fridge')} Aucun équipement froid</span>`}
       ${commerciauxNoms?`<span class="helptext" style="display:block;margin-top:6px;">Commercial en charge : ${escapeHtml(commerciauxNoms)}</span>`:''}
+      <div id="frigo-edit-box"></div>
     </div>
 
     ${scanMode ? '' : `<div class="card" style="padding:12px 14px;">
@@ -2312,14 +2322,41 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
       }catch(e){ toast('Échec de la mise à jour.', 'critical'); }
     });
   });
-  const toggleFrigoBtn = backdrop.querySelector('#toggle-frigo');
-  if(toggleFrigoBtn) toggleFrigoBtn.addEventListener('click', async ()=>{
-    if(!APP.db) return;
-    try{
-      const r = await dbUpdate('clients_rtm', clientId, {aFrigo: !c.aFrigo}, APP.clients, `Frigo ${c.nom}`);
-      toast(r.queued ? "Hors connexion — enregistré sur l'appareil, sera envoyé automatiquement." : 'Statut frigo mis à jour.', r.queued?'warning':'good');
-      backdrop.remove();
-    }catch(e){ toast('Échec de la mise à jour.', 'critical'); }
+  const editFrigoBtn = backdrop.querySelector('#edit-frigo');
+  if(editFrigoBtn) editFrigoBtn.addEventListener('click', ()=>{
+    const box = backdrop.querySelector('#frigo-edit-box');
+    let vitrine = !!c.vitrine;
+    let congelateurs = [...(c.congelateurs||[])];
+    function renderFrigoBox(){
+      box.innerHTML = `<div class="divider"></div>
+        <div class="checkbox-row"><input type="checkbox" id="fe-vitrine" ${vitrine?'checked':''}><label for="fe-vitrine">Point de vente équipé (ou à équiper) d'une vitrine</label></div>
+        <div class="field" style="margin-top:10px;">Congélateurs
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0;" id="fe-congel-list">
+            ${congelateurs.length ? congelateurs.map((cap,i)=>`<span class="frigo-badge" data-cap-idx="${i}" style="cursor:pointer;" title="Cliquer pour retirer ce congélateur">${icon('fridge')} ${cap}L ×</span>`).join('') : '<span class="helptext">Aucun congélateur.</span>'}
+          </div>
+          <select id="fe-congel-add"><option value="">+ Ajouter un congélateur…</option>${CAPACITES_CONGELATEUR.map(cap=>`<option value="${cap}">${cap}L</option>`).join('')}</select>
+        </div>
+        <button class="btn primary sm" id="fe-save" style="margin-top:10px;">Enregistrer</button>`;
+      box.querySelector('#fe-vitrine').addEventListener('change', e=>{ vitrine = e.target.checked; });
+      box.querySelectorAll('[data-cap-idx]').forEach(el=>el.addEventListener('click', ()=>{
+        congelateurs.splice(Number(el.getAttribute('data-cap-idx')), 1);
+        renderFrigoBox();
+      }));
+      box.querySelector('#fe-congel-add').addEventListener('change', e=>{
+        const cap = Number(e.target.value);
+        if(cap){ congelateurs.push(cap); renderFrigoBox(); }
+      });
+      box.querySelector('#fe-save').addEventListener('click', async ()=>{
+        if(!APP.db) return;
+        const payload = { vitrine, congelateurs: [...congelateurs], aFrigo: !!(vitrine || congelateurs.length) };
+        try{
+          const r = await dbUpdate('clients_rtm', clientId, payload, APP.clients, `Équipement frigo ${c.nom}`);
+          toast(r.queued ? "Hors connexion — enregistré sur l'appareil, sera envoyé automatiquement." : 'Équipement frigo mis à jour.', r.queued?'warning':'good');
+          backdrop.remove();
+        }catch(e){ toast('Échec de la mise à jour.', 'critical'); }
+      });
+    }
+    renderFrigoBox();
   });
   const archiveClientBtn = backdrop.querySelector('#archive-client-btn');
   if(archiveClientBtn) archiveClientBtn.addEventListener('click', async ()=>{
@@ -2932,13 +2969,19 @@ function renderAvecProspect(box, content, user, commercialId){
       <label class="field">Adresse / repère<input type="text" id="fap-adresse" placeholder="Ex : près du marché"></label>
       <label class="field">Contact<input type="tel" id="fap-contact" placeholder="77 000 00 00"></label>
     </div>
-    <div class="checkbox-row" style="margin-top:10px;"><input type="checkbox" id="fap-frigo"><label for="fap-frigo">Point de vente équipé (ou à équiper) d'un frigo</label></div>
+    <div class="checkbox-row" style="margin-top:10px;"><input type="checkbox" id="fap-vitrine"><label for="fap-vitrine">Point de vente équipé (ou à équiper) d'une vitrine</label></div>
+    <div class="checkbox-row" style="margin-top:6px;"><input type="checkbox" id="fap-congel"><label for="fap-congel">Point de vente équipé (ou à équiper) d'un congélateur</label></div>
+    <div id="fap-congel-cap" style="display:none;margin-top:6px;max-width:220px;">
+      <label class="field">Capacité du congélateur<select id="fap-congel-capacite">${CAPACITES_CONGELATEUR.map(cap=>`<option value="${cap}" ${cap===300?'selected':''}>${cap}L</option>`).join('')}</select></label>
+    </div>
     <div class="divider"></div>
     <label class="field">Notes<textarea id="fap-notes" placeholder="Contexte de la prospection…"></textarea></label>
     <div class="gps-box" style="margin-top:12px;" id="fap-gps">Aucune position capturée. <button class="btn sm" id="fap-gps-btn">${icon('pin')} Capturer ma position</button></div>
     <button class="btn primary" id="fap-submit" style="margin-top:16px;width:100%;justify-content:center;">${icon('userplus')} Transmettre ce prospect</button>
   `;
   const gps = wireGpsCapture(box, '#fap-gps-btn', '#fap-gps');
+  const fapCongelCb = box.querySelector('#fap-congel'); const fapCongelCapBox = box.querySelector('#fap-congel-cap');
+  fapCongelCb.addEventListener('change', ()=>{ fapCongelCapBox.style.display = fapCongelCb.checked ? '' : 'none'; });
   box.querySelector('#fap-submit').addEventListener('click', async ()=>{
     if(!APP.db) return;
     const nom = box.querySelector('#fap-nom').value.trim();
@@ -2951,7 +2994,10 @@ function renderAvecProspect(box, content, user, commercialId){
     const contact = box.querySelector('#fap-contact').value.trim();
     const clientPayload = {
       nom, secteur, zone, adresse: box.querySelector('#fap-adresse').value.trim(), telephone: contact,
-      aFrigo: box.querySelector('#fap-frigo').checked, commercialId, commercialIds: commercialId ? [commercialId] : [],
+      vitrine: box.querySelector('#fap-vitrine').checked,
+      congelateurs: box.querySelector('#fap-congel').checked ? [Number(box.querySelector('#fap-congel-capacite').value)] : [],
+      aFrigo: box.querySelector('#fap-vitrine').checked || box.querySelector('#fap-congel').checked,
+      commercialId, commercialIds: commercialId ? [commercialId] : [],
       nombreVisites:0, joursVisite: [], objectifMensuel: 150000, statut:'prospect', dateCreation: todayISO(), creePar: user.id,
       origineProspection:'superviseur', superviseurId: user.id,
       lat: gps.value ? gps.value.lat : fallback[0], lng: gps.value ? gps.value.lng : fallback[1],
@@ -3101,7 +3147,11 @@ function renderSansProspect(box, content, user){
       <label class="field">Adresse / repère<input type="text" id="fp-adresse" placeholder="Ex : près du marché"></label>
       <label class="field">Contact<input type="tel" id="fp-contact" placeholder="77 000 00 00"></label>
     </div>
-    <div class="checkbox-row" style="margin-top:10px;"><input type="checkbox" id="fp-frigo"><label for="fp-frigo">Point de vente équipé (ou à équiper) d'un frigo</label></div>
+    <div class="checkbox-row" style="margin-top:10px;"><input type="checkbox" id="fp-vitrine"><label for="fp-vitrine">Point de vente équipé (ou à équiper) d'une vitrine</label></div>
+    <div class="checkbox-row" style="margin-top:6px;"><input type="checkbox" id="fp-congel"><label for="fp-congel">Point de vente équipé (ou à équiper) d'un congélateur</label></div>
+    <div id="fp-congel-cap" style="display:none;margin-top:6px;max-width:220px;">
+      <label class="field">Capacité du congélateur<select id="fp-congel-capacite">${CAPACITES_CONGELATEUR.map(cap=>`<option value="${cap}" ${cap===300?'selected':''}>${cap}L</option>`).join('')}</select></label>
+    </div>
     <div id="fp-responsable" class="helptext" style="margin-top:8px;"></div>
     <div class="divider"></div>
     <label class="field">Notes<textarea id="fp-notes" placeholder="Contexte de la prospection…"></textarea></label>
@@ -3109,6 +3159,8 @@ function renderSansProspect(box, content, user){
     <button class="btn primary" id="fp-submit" style="margin-top:16px;width:100%;justify-content:center;">${icon('userplus')} Transmettre ce prospect</button>
   `;
   const gps = wireGpsCapture(box, '#fp-gps-btn', '#fp-gps');
+  const fpCongelCb = box.querySelector('#fp-congel'); const fpCongelCapBox = box.querySelector('#fp-congel-cap');
+  fpCongelCb.addEventListener('change', ()=>{ fpCongelCapBox.style.display = fpCongelCb.checked ? '' : 'none'; });
   const zoneSel = box.querySelector('#fp-zone');
   function updateResponsable(){
     const responsable = responsibleCommercialForZone(zoneSel.value);
@@ -3131,7 +3183,10 @@ function renderSansProspect(box, content, user){
     const contact = box.querySelector('#fp-contact').value.trim();
     const clientPayload = {
       nom, secteur, zone, adresse: box.querySelector('#fp-adresse').value.trim(), telephone: contact,
-      aFrigo: box.querySelector('#fp-frigo').checked, commercialId: responsable ? responsable.id : null, commercialIds: responsable ? [responsable.id] : [],
+      vitrine: box.querySelector('#fp-vitrine').checked,
+      congelateurs: box.querySelector('#fp-congel').checked ? [Number(box.querySelector('#fp-congel-capacite').value)] : [],
+      aFrigo: box.querySelector('#fp-vitrine').checked || box.querySelector('#fp-congel').checked,
+      commercialId: responsable ? responsable.id : null, commercialIds: responsable ? [responsable.id] : [],
       nombreVisites:0, joursVisite: [], objectifMensuel: 150000, statut:'prospect', dateCreation: todayISO(), creePar: user.id,
       origineProspection:'superviseur', superviseurId: user.id,
       lat: gps.value ? gps.value.lat : fallback[0], lng: gps.value ? gps.value.lng : fallback[1],
@@ -3947,6 +4002,7 @@ async function exportExcel(){
     const wb = XLSX.utils.book_new();
     const clientsRows = [...APP.clients.values()].map(c=>({
       Code:c.code||'', Nom:c.nom, Secteur:c.secteur||'', Zone:c.zone||'', Adresse:c.adresse||'', Telephone:c.telephone||'', Frigo:c.aFrigo?'Oui':'Non',
+      Vitrine:c.vitrine?'Oui':'Non', Congelateurs:(c.congelateurs||[]).map(cap=>cap+'L').join(', '),
       Commercial: clientCommerciauxNoms(c)||'', ObjectifMensuel:c.objectifMensuel||'',
       NombreVisites:c.nombreVisites||'', JoursVisite:(c.joursVisite||[]).join(', '), Statut:c.statut,
       Verifie: c.statut==='actif' ? (isClientVerified(c)?'Oui':'Non') : '—',
@@ -4038,6 +4094,27 @@ function secteursForEquipe(user){
 function isClientVerified(c){
   return !!(c.secteur && c.zone && c.telephone && c.nombreVisites && (c.joursVisite||[]).length);
 }
+// Objectif mensuel lié à l'équipement froid du client : vitrine (montant fixe) + somme des
+// objectifs de chaque congélateur selon sa capacité (0 si le client n'a aucun équipement froid,
+// auquel cas suggestObjective() retombe sur l'objectif calculé à partir de l'historique).
+function frigoEquipementObjectif(c){
+  if(!c) return 0;
+  let total = c.vitrine ? OBJECTIF_VITRINE : 0;
+  (c.congelateurs||[]).forEach(cap=>{ total += OBJECTIF_PAR_CAPACITE_CONGELATEUR[cap] || OBJECTIF_PAR_CAPACITE_CONGELATEUR[300]; });
+  return total;
+}
+function hasFrigoEquipement(c){
+  return !!(c && (c.vitrine || (c.congelateurs && c.congelateurs.length)));
+}
+// Une étiquette par équipement (plutôt qu'un seul badge générique « Frigo ») pour distinguer
+// précisément ce qu'un client a : une vitrine et/ou un ou plusieurs congélateurs, avec leur capacité.
+function frigoEquipementBadgesHtml(c){
+  if(!hasFrigoEquipement(c)) return '';
+  const badges = [];
+  if(c.vitrine) badges.push(`<span class="frigo-badge">${icon('fridge')} Vitrine</span>`);
+  (c.congelateurs||[]).forEach(cap=>{ badges.push(`<span class="frigo-badge">${icon('fridge')} Congélateur ${cap}L</span>`); });
+  return badges.join(' ');
+}
 // Les clients importés depuis l'Excel n'ont jamais eu de vraie position GPS : ils ont reçu, comme
 // tout client sans position, le point générique du secteur (SECTEUR_FALLBACK_COORD) utilisé par
 // défaut. Cette fonction permet de distinguer « position jamais confirmée sur place » (toujours
@@ -4125,7 +4202,11 @@ function renderTourneeProspecter(body, user){
         <label class="field">Adresse / repère<input type="text" id="tp-adresse" placeholder="Ex : près du marché"></label>
         <label class="field">Téléphone<input type="tel" id="tp-tel" placeholder="77 000 00 00"></label>
       </div>
-      <div class="checkbox-row" style="margin-top:8px;"><input type="checkbox" id="tp-frigo"><label for="tp-frigo">Équipé (ou à équiper) d'un frigo</label></div>
+      <div class="checkbox-row" style="margin-top:8px;"><input type="checkbox" id="tp-vitrine"><label for="tp-vitrine">Équipé (ou à équiper) d'une vitrine</label></div>
+      <div class="checkbox-row" style="margin-top:6px;"><input type="checkbox" id="tp-congel"><label for="tp-congel">Équipé (ou à équiper) d'un congélateur</label></div>
+      <div id="tp-congel-cap" style="display:none;margin-top:6px;max-width:220px;">
+        <label class="field">Capacité du congélateur<select id="tp-congel-capacite">${CAPACITES_CONGELATEUR.map(cap=>`<option value="${cap}" ${cap===300?'selected':''}>${cap}L</option>`).join('')}</select></label>
+      </div>
       <div class="divider"></div>
       <label class="field">Notes<textarea id="tp-notes" placeholder="Contexte de la prospection…"></textarea></label>
       <div class="gps-box" style="margin-top:12px;" id="tp-gps">Aucune position capturée. <button class="btn sm" id="tp-gps-btn">${icon('pin')} Capturer ma position</button></div>
@@ -4133,6 +4214,8 @@ function renderTourneeProspecter(body, user){
     </div>
   `;
   const gps = wireGpsCapture(body, '#tp-gps-btn', '#tp-gps');
+  const tpCongelCb = body.querySelector('#tp-congel'); const tpCongelCapBox = body.querySelector('#tp-congel-cap');
+  tpCongelCb.addEventListener('change', ()=>{ tpCongelCapBox.style.display = tpCongelCb.checked ? '' : 'none'; });
   body.querySelector('#tp-submit').addEventListener('click', async ()=>{
     if(!APP.db) return;
     const nom = body.querySelector('#tp-nom').value.trim();
@@ -4145,7 +4228,9 @@ function renderTourneeProspecter(body, user){
     const payload = {
       nom, secteur, zone, adresse: body.querySelector('#tp-adresse').value.trim(),
       telephone: body.querySelector('#tp-tel').value.trim(),
-      aFrigo: body.querySelector('#tp-frigo').checked,
+      vitrine: body.querySelector('#tp-vitrine').checked,
+      congelateurs: body.querySelector('#tp-congel').checked ? [Number(body.querySelector('#tp-congel-capacite').value)] : [],
+      aFrigo: body.querySelector('#tp-vitrine').checked || body.querySelector('#tp-congel').checked,
       joursVisite: [], nombreVisites: null, objectifMensuel: 150000,
       commercialId: user.id, commercialIds: [user.id], statut:'prospect', origineProspection:'terrain',
       notesProspection: body.querySelector('#tp-notes').value.trim(),
@@ -4408,7 +4493,7 @@ function renderClientsFrigo(content, user){
         <select id="ff-secteur"><option value="">Tous les secteurs</option>${SECTEUR_NAMES.map(s=>`<option>${escapeHtml(s)}</option>`).join('')}</select>
       </div>
     </div>
-    <div class="banner" style="margin-bottom:14px;">${icon('fridge')} Tout client équipé d'un frigo reçoit automatiquement un objectif mensuel fixe de ${fmtNum(150000)} FCFA, quel que soit son historique d'achats.</div>
+    <div class="banner" style="margin-bottom:14px;">${icon('fridge')} Tout client équipé d'une vitrine et/ou d'un ou plusieurs congélateurs reçoit un objectif mensuel fixe basé sur son équipement — ${fmtNum(150000)} FCFA pour une vitrine ou un congélateur 200L/300L, ${fmtNum(200000)} pour un congélateur 400L, ${fmtNum(300000)} pour un congélateur 500L (les objectifs s'additionnent si plusieurs congélateurs) — plutôt qu'un objectif calculé sur son historique d'achats.</div>
     <div class="kpi-grid" id="ff-kpis" style="margin-bottom:16px;"></div>
     <div class="card"><div class="table-wrap" id="ff-table"></div></div>
   `;
@@ -4433,12 +4518,13 @@ function renderClientsFrigo(content, user){
       <div class="kpi-tile"><div class="kpi-label">Objectifs atteints</div><div class="kpi-value">${atteints}<span style="font-size:12px;color:var(--text-muted);">/${rows.length}</span></div></div>
     `;
     const box = content.querySelector('#ff-table');
-    box.innerHTML = rows.length ? `<table><thead><tr><th>Client</th><th>Secteur</th><th>Zone</th>${!isCommercial?'<th>Commercial</th>':''}<th>Objectif</th><th>Réalisé (mois)</th><th>Progression</th><th>Dernière visite</th></tr></thead><tbody>
+    box.innerHTML = rows.length ? `<table><thead><tr><th>Client</th><th>Secteur</th><th>Zone</th><th>Équipement</th>${!isCommercial?'<th>Commercial</th>':''}<th>Objectif</th><th>Réalisé (mois)</th><th>Progression</th><th>Dernière visite</th></tr></thead><tbody>
       ${rows.map(r=>{ const c=r.c; const commercialNoms = clientCommerciauxNoms(c);
         return `<tr data-client="${c.id}" style="cursor:pointer;">
-          <td><b>${escapeHtml(c.nom)}</b> ${icon('fridge')}</td>
+          <td><b>${escapeHtml(c.nom)}</b></td>
           <td>${c.secteur?escapeHtml(c.secteur):'—'}</td>
           <td>${c.zone?escapeHtml(c.zone):'—'}</td>
+          <td><div style="display:flex;gap:4px;flex-wrap:wrap;">${frigoEquipementBadgesHtml(c)}</div></td>
           ${!isCommercial?`<td>${commercialNoms?escapeHtml(commercialNoms):'—'}</td>`:''}
           <td class="num">${fmtNum(r.objectif)}</td>
           <td class="num">${fmtNum(r.realise)}</td>

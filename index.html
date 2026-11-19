@@ -4295,7 +4295,7 @@ async function exportClientsQrPDF(clients, triggerBtn){
   try{
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({unit:'pt', format:'a4'});
-    const marginX = 36, marginY = 40, cols = 3, cellW = 170, cellH = 190, qrSize = 120;
+    const marginX = 36, marginY = 40, cols = 3, cellW = 170, cellH = 205, qrSize = 120;
     let x = marginX, y = marginY, col = 0;
     doc.setFont('helvetica','bold'); doc.setFontSize(14);
     doc.text('DOXAL — Feuille de QR codes clients', marginX, 24);
@@ -4312,26 +4312,30 @@ async function exportClientsQrPDF(clients, triggerBtn){
     clients.forEach((c, idx)=>{
       if(y + cellH > 800){ doc.addPage(); x = marginX; y = marginY; col = 0; }
       const dataUrl = dataUrls[idx];
-      // Nom du client en haut de la vignette, QR code au milieu — toujours à la même hauteur, pour
-      // que tous les QR codes de la feuille restent parfaitement alignés une fois imprimée — et
-      // initiales du commercial en bas. Le nom tient toujours sur une seule ligne, tronqué avec
-      // « … » selon sa largeur réellement mesurée (et non un nombre de caractères fixe) pour ne
-      // jamais déborder sur les premières barres du QR code juste en dessous.
+      // Initiales du commercial en haut (toujours courtes, ne passent jamais à la ligne) : le QR
+      // code juste en dessous reste donc à la même position fixe sur toute la feuille, parfaitement
+      // aligné une fois imprimée. Le nom complet du client est affiché en bas, en petit et sans
+      // gras pour rester lisible sans jamais déborder sur le QR code ni sur la ligne suivante une
+      // fois la feuille découpée : il passe sur plusieurs lignes si besoin (jusqu'à 3), tronqué avec
+      // « … » seulement dans le cas rare où il ne tiendrait toujours pas.
       doc.setFont('helvetica','bold'); doc.setFontSize(11);
-      let name = String(c.nom||'');
-      const maxNameW = cellW-6;
-      if(doc.getTextWidth(name) > maxNameW){
-        while(name.length > 1 && doc.getTextWidth(name.replace(/\s+$/,'') + '…') > maxNameW){ name = name.slice(0, -1); }
-        name = name.replace(/\s+$/,'') + '…';
-      }
-      doc.text(name, x + cellW/2, y + 12, {align:'center'});
+      doc.text(clientCommerciauxInitiales(c) || '', x + cellW/2, y + 12, {align:'center'});
       // Compression 'SLOW' : sans elle, jsPDF stocke chaque QR en bitmap brut non compressé
       // (~270 Ko par QR, soit plus de 150 Mo pour une feuille de 600 clients) — avec elle, on
       // retombe à la taille normale d'un PNG (quelques Ko par QR), fichier utilisable et
       // partageable, sans perte de lisibilité du QR code.
       if(dataUrl){ try{ doc.addImage(dataUrl, 'PNG', x + (cellW-qrSize)/2, y + 20, qrSize, qrSize, undefined, 'SLOW'); }catch(e){} }
-      doc.setFont('helvetica','normal'); doc.setFontSize(9);
-      doc.text(clientCommerciauxInitiales(c) || '', x + cellW/2, y + 20 + qrSize + 16, {align:'center'});
+      doc.setFont('helvetica','normal'); doc.setFontSize(8);
+      const maxNameW = cellW-6;
+      let nameLines = doc.splitTextToSize(String(c.nom||''), maxNameW);
+      const MAX_NAME_LINES = 3;
+      if(nameLines.length > MAX_NAME_LINES){
+        nameLines = nameLines.slice(0, MAX_NAME_LINES);
+        let last = nameLines[MAX_NAME_LINES-1];
+        while(last.length > 1 && doc.getTextWidth(last.replace(/\s+$/,'') + '…') > maxNameW){ last = last.slice(0, -1); }
+        nameLines[MAX_NAME_LINES-1] = last.replace(/\s+$/,'') + '…';
+      }
+      doc.text(nameLines, x + cellW/2, y + 20 + qrSize + 16, {align:'center'});
       col++;
       if(col>=cols){ col=0; x = marginX; y += cellH; }
       else { x += cellW; }

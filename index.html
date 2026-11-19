@@ -4449,33 +4449,50 @@ async function exportClientsQrPDF(clients, triggerBtn){
       results.forEach((url, j)=>{ dataUrls[i+j] = url; });
       if(triggerBtn){ triggerBtn.textContent = `Génération… ${Math.min(i+BATCH_SIZE, clients.length)}/${clients.length}`; }
     }
+    // Tronque un texte sur une seule ligne avec « … » s'il dépasse maxW, au lieu de le laisser
+    // déborder du cadre — utilisé pour les initiales du commercial, qui pouvaient auparavant
+    // déborder sur la colonne voisine quand un client est partagé entre plusieurs commerciaux.
+    function fitOneLine(text, maxW){
+      text = String(text||'');
+      if(!text || doc.getTextWidth(text) <= maxW) return text;
+      let t = text;
+      while(t.length > 1 && doc.getTextWidth(t.replace(/\s+$/,'') + '…') > maxW){ t = t.slice(0, -1); }
+      return t.replace(/\s+$/,'') + '…';
+    }
     clients.forEach((c, idx)=>{
       if(y + cellH > 800){ doc.addPage(); x = marginX; y = marginY; col = 0; }
       const dataUrl = dataUrls[idx];
-      // Initiales du commercial en haut (toujours courtes, ne passent jamais à la ligne) : le QR
-      // code juste en dessous reste donc à la même position fixe sur toute la feuille, parfaitement
-      // aligné une fois imprimée. Le nom complet du client est affiché en bas, en petit et sans
-      // gras pour rester lisible sans jamais déborder sur le QR code ni sur la ligne suivante une
-      // fois la feuille découpée : il passe sur plusieurs lignes si besoin (jusqu'à 3), tronqué avec
-      // « … » seulement dans le cas rare où il ne tiendrait toujours pas.
+      // Cadre visible autour de chaque étiquette : repère clair pour la découpe, et limite dans
+      // laquelle tout le texte (initiales + nom du client) doit désormais impérativement rester —
+      // plus aucun texte ne peut déborder sur la colonne voisine une fois la feuille imprimée.
+      const frameY = y + 2, frameH = cellH - 10, frameW = cellW - 8;
+      doc.setDrawColor(170); doc.setLineWidth(0.6);
+      doc.roundedRect(x + 4, frameY, frameW, frameH, 4, 4, 'S');
+      const maxTextW = frameW - 16;
+      // Initiales du commercial en haut, maintenant limitées à la largeur du cadre (tronquées avec
+      // « … » si trop longues) : le QR code juste en dessous reste à la même position fixe sur
+      // toute la feuille, parfaitement aligné une fois imprimée.
       doc.setFont('helvetica','bold'); doc.setFontSize(11);
-      doc.text(clientCommerciauxInitiales(c) || '', x + cellW/2, y + 12, {align:'center'});
+      doc.text(fitOneLine(clientCommerciauxInitiales(c), maxTextW), x + cellW/2, y + 14, {align:'center'});
       // Compression 'SLOW' : sans elle, jsPDF stocke chaque QR en bitmap brut non compressé
       // (~270 Ko par QR, soit plus de 150 Mo pour une feuille de 600 clients) — avec elle, on
       // retombe à la taille normale d'un PNG (quelques Ko par QR), fichier utilisable et
       // partageable, sans perte de lisibilité du QR code.
-      if(dataUrl){ try{ doc.addImage(dataUrl, 'PNG', x + (cellW-qrSize)/2, y + 20, qrSize, qrSize, undefined, 'SLOW'); }catch(e){} }
+      if(dataUrl){ try{ doc.addImage(dataUrl, 'PNG', x + (cellW-qrSize)/2, y + 22, qrSize, qrSize, undefined, 'SLOW'); }catch(e){} }
+      // Le nom complet du client est affiché en bas, en petit et sans gras pour rester lisible sans
+      // jamais déborder du cadre ni sur la ligne suivante une fois la feuille découpée : il passe
+      // sur plusieurs lignes si besoin (jusqu'à 3), tronqué avec « … » seulement dans le cas rare
+      // où il ne tiendrait toujours pas.
       doc.setFont('helvetica','normal'); doc.setFontSize(8);
-      const maxNameW = cellW-6;
-      let nameLines = doc.splitTextToSize(String(c.nom||''), maxNameW);
+      let nameLines = doc.splitTextToSize(String(c.nom||''), maxTextW);
       const MAX_NAME_LINES = 3;
       if(nameLines.length > MAX_NAME_LINES){
         nameLines = nameLines.slice(0, MAX_NAME_LINES);
         let last = nameLines[MAX_NAME_LINES-1];
-        while(last.length > 1 && doc.getTextWidth(last.replace(/\s+$/,'') + '…') > maxNameW){ last = last.slice(0, -1); }
+        while(last.length > 1 && doc.getTextWidth(last.replace(/\s+$/,'') + '…') > maxTextW){ last = last.slice(0, -1); }
         nameLines[MAX_NAME_LINES-1] = last.replace(/\s+$/,'') + '…';
       }
-      doc.text(nameLines, x + cellW/2, y + 20 + qrSize + 16, {align:'center'});
+      doc.text(nameLines, x + cellW/2, y + 22 + qrSize + 16, {align:'center'});
       col++;
       if(col>=cols){ col=0; x = marginX; y += cellH; }
       else { x += cellW; }

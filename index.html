@@ -891,7 +891,62 @@ let renderScheduled = false;
 function scheduleRender(){
   if(renderScheduled) return;
   renderScheduled = true;
-  requestAnimationFrame(()=>{ renderScheduled = false; render(); });
+  requestAnimationFrame(()=>{
+    renderScheduled = false;
+    // scheduleRender() est déclenché par la synchronisation temps réel : dès qu'un commercial ou un
+    // superviseur enregistre quoi que ce soit, où que ce soit dans l'équipe, toutes les sessions
+    // ouvertes recalculent toute la page (voir render()). Sans précaution, ce rafraîchissement en
+    // arrière-plan effaçait les filtres (plages de dates, secteur, mode...) que l'utilisateur était
+    // en train de régler sur son écran, qui "sautaient" tout seuls aux valeurs par défaut sans qu'il
+    // y touche. On les sauvegarde donc juste avant ce rafraîchissement, puis on les réinjecte après
+    // coup dans les mêmes champs — une vraie navigation (setRoute / hashchange) appelle render()
+    // directement et n'est donc pas concernée : changer de page réinitialise bien les filtres.
+    const preserved = capturePageFilterState();
+    render();
+    restorePageFilterState(preserved);
+  });
+}
+// Capture les valeurs de tous les champs de filtre (dates, listes déroulantes, recherche...) de
+// l'écran actuellement affiché, ainsi que le champ qui avait le focus, pour pouvoir les restaurer
+// après un rafraîchissement en arrière-plan qui reconstruit entièrement la page.
+function capturePageFilterState(){
+  const content = document.getElementById('content');
+  if(!content) return null;
+  const values = {};
+  content.querySelectorAll('input[type="date"], input[type="text"], input[type="search"], input[type="number"], select').forEach(fld=>{
+    if(fld.id) values[fld.id] = fld.value;
+  });
+  const active = document.activeElement;
+  const activeId = (active && content.contains(active) && active.id) ? active.id : null;
+  const hasSelection = activeId && 'selectionStart' in active;
+  return {
+    route: APP.route, values, activeId,
+    selStart: hasSelection ? active.selectionStart : null,
+    selEnd: hasSelection ? active.selectionEnd : null,
+  };
+}
+// Réinjecte l'état capturé par capturePageFilterState() dans les champs de même id une fois la page
+// reconstruite, en déclenchant leur évènement 'change' pour que le filtrage réel se réapplique avec
+// les valeurs restaurées (chaque écran réagit déjà à ce même évènement sur ces champs). Ignoré si la
+// page affichée a changé entre-temps (vraie navigation) : seul un simple rafraîchissement de données
+// sur le même écran doit restaurer quoi que ce soit.
+function restorePageFilterState(preserved){
+  if(!preserved || preserved.route !== APP.route) return;
+  const content = document.getElementById('content');
+  if(!content) return;
+  Object.keys(preserved.values).forEach(id=>{
+    const fld = content.querySelector('#'+id);
+    if(!fld || fld.value === preserved.values[id]) return;
+    fld.value = preserved.values[id];
+    fld.dispatchEvent(new Event('change', {bubbles:true}));
+  });
+  if(preserved.activeId){
+    const toFocus = content.querySelector('#'+preserved.activeId);
+    if(toFocus){
+      toFocus.focus();
+      if(preserved.selStart!=null && toFocus.setSelectionRange){ try{ toFocus.setSelectionRange(preserved.selStart, preserved.selEnd); }catch(e){} }
+    }
+  }
 }
 
 /* ============================== MODE HORS LIGNE ============================== */
@@ -1418,10 +1473,21 @@ function navFor(user){
     ];
   }
   if(user.role==='adv'){
+    // L'ADV administre l'ensemble de l'outil et doit pouvoir, pour des démonstrations ou pour
+    // dépanner une équipe, accéder à tous les écrans normalement réservés aux commerciaux
+    // (tournée, historique, prospection, stats) et aux superviseurs (fiche de suivi, journal,
+    // pricing), en plus de ses propres écrans de pilotage global.
     return [
       {r:'#/scan', l:'Scanner un client', i:'camera'},
       {r:'#/import-ventes', l:'Importer les ventes', i:'download'},
       {r:'#/comptes', l:'Comptes à créer', i:'idcard'},
+      {r:'#/tournee', l:'Ma tournée du jour', i:'route'},
+      {r:'#/prospects', l:'Historique de prospection', i:'userplus'},
+      {r:'#/historique', l:'Historique des tournées', i:'history'},
+      {r:'#/mes-stats', l:'Mes statistiques', i:'chart'},
+      {r:'#/fiche', l:'Fiche de suivi', i:'clipboard'},
+      {r:'#/journal', l:'Journal d\'activité', i:'journal'},
+      {r:'#/pricing', l:'Pricing marché', i:'tag'},
       {r:'#/activite', l:'Activité générale', i:'journal'},
       {r:'#/prospection', l:'Suivi de la prospection', i:'userplus'},
       {r:'#/superviseurs', l:'Suivi des superviseurs', i:'clipboard'},

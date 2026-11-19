@@ -4183,6 +4183,7 @@ function renderClientsDB(content, user){
       ${!isCommercial ? `<select id="filter-commercial"><option value="">Tous les commerciaux</option>${[...APP.profils.values()].filter(p=>p.role==='commercial').map(p=>`<option value="${p.id}">${escapeHtml(p.nom)}</option>`).join('')}</select>` : ''}
       <select id="filter-secteur"><option value="">Tous les secteurs</option>${SECTEUR_NAMES.map(s=>`<option>${escapeHtml(s)}</option>`).join('')}</select>
       <select id="filter-statut"><option value="">Statut : tous</option><option value="actif">Actifs</option><option value="a_valider">En attente ADV</option><option value="prospect">Prospects</option><option value="archive">Archivés</option></select>
+      <select id="filter-verif"><option value="">Trier par vérification</option><option value="non_verifie">Non vérifiés d'abord</option><option value="verifie">Vérifiés d'abord</option></select>
     </div>
     ${canScanLookup ? `<div class="banner" style="margin-bottom:14px;">${icon('camera')} Scannez le QR code collé chez un client pour ouvrir directement sa fiche : vous y verrez quel commercial est passé, les ventes effectuées et quel superviseur est passé, avec la date et l'heure de chaque passage.</div>` : ''}
     ${isCommercial ? `<div class="banner" style="margin-bottom:14px;">Complétez le secteur (auto), la zone, le téléphone, le nombre de visites et les jours de visite de chaque client : tant qu'une information manque, il apparaît « non vérifié » ci-dessous. Cliquez sur une ligne pour compléter.</div>` : ''}
@@ -4215,6 +4216,12 @@ function renderClientsDB(content, user){
     const source = st==='archive' ? allClients.filter(c=>c.archive) : list;
     const filtered = source.filter(c=> (!com||clientHasCommercial(c, com)) && (!sec||c.secteur===sec) && (st==='archive'||!st||c.statut===st)
       && (!q || [c.nom, c.code, c.telephone, c.zone, c.secteur].some(v=> v && normalizeSearch(v).includes(q))));
+    // Tri optionnel par statut de vérification de la fiche (secteur, zone, téléphone, nombre de
+    // visites et jours de visite tous renseignés) — pour repérer d'un coup d'œil tous les clients
+    // non vérifiés à compléter en priorité, sans perdre les autres clients du filtre actuel.
+    const verifSort = content.querySelector('#filter-verif').value;
+    if(verifSort==='non_verifie') filtered.sort((a,b)=> (isClientVerified(a)?1:0) - (isClientVerified(b)?1:0));
+    else if(verifSort==='verifie') filtered.sort((a,b)=> (isClientVerified(b)?1:0) - (isClientVerified(a)?1:0));
     currentFiltered = filtered;
     const tb = content.querySelector('#clients-tbody');
     tb.innerHTML = filtered.map(c=>{
@@ -4246,6 +4253,7 @@ function renderClientsDB(content, user){
   }
   content.querySelector('#filter-secteur').addEventListener('change', apply);
   content.querySelector('#filter-statut').addEventListener('change', apply);
+  content.querySelector('#filter-verif').addEventListener('change', apply);
   content.querySelector('#filter-search').addEventListener('input', apply);
   const comSel = content.querySelector('#filter-commercial');
   if(comSel) comSel.addEventListener('change', apply);

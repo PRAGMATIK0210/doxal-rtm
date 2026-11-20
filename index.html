@@ -1687,7 +1687,7 @@ function renderImportVentes(content, user){
     analyzeBtn.disabled = false; analyzeBtn.innerHTML = `${icon('download')} Analyser le fichier`;
   });
   function renderErpPreview(){
-    const { groupes, dates, clientsIntrouvables, commerciauxNonReconnus } = analyse;
+    const { groupes, dates, clientsIntrouvables, commerciauxNonReconnus, clientsAmbigus } = analyse;
     resultBox.innerHTML = `
       <div class="card" style="padding:12px 14px;border-color:var(--accent);">
         <div class="card-title" style="margin-bottom:8px;">Aperçu avant import</div>
@@ -1698,6 +1698,7 @@ function renderImportVentes(content, user){
         </div>
         ${clientsIntrouvables.length ? `<div class="helptext" style="margin-bottom:10px;">Codes non reconnus dans la base (vérifiez qu'ils correspondent bien à des comptes créés) : ${clientsIntrouvables.map(escapeHtml).join(', ')}</div>` : ''}
         ${commerciauxNonReconnus.length ? `<div class="helptext" style="margin-bottom:10px;">Nom de centre de coût non reconnu comme commercial (vente enregistrée sans commercial attribué, à vérifier manuellement) : ${commerciauxNonReconnus.map(escapeHtml).join(', ')}</div>` : ''}
+        ${clientsAmbigus && clientsAmbigus.length ? `<div class="helptext" style="margin-bottom:10px;color:var(--warning);">Code partagé par plusieurs comptes clients sans correspondance sûre avec le commercial identifié — attribué au premier compte par défaut, à vérifier après import : ${clientsAmbigus.map(escapeHtml).join(', ')}</div>` : ''}
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <button class="btn primary" id="erp-confirm-btn">${icon('check')} Confirmer l'import</button>
           <button class="btn ghost" id="erp-cancel-btn">Annuler</button>
@@ -1825,15 +1826,39 @@ async function analyzeErpFile(file){
   }
   const clientsIntrouvables = new Set();
   const commerciauxNonReconnus = new Set();
+  const clientsAmbigus = new Set();
+  // Plusieurs comptes clients de notre base peuvent partager le même code ERP : les clients
+  // "divers" (CLTDIV) non enregistrés individuellement dans l'ERP, suivis chez nous avec un compte
+  // séparé par secteur/commercial (ex : CLIENTS COMPTOIRS), ou une enseigne à plusieurs points de
+  // vente (Total, Edens...) utilisant un seul code par enseigne. Avant, on prenait toujours le
+  // premier trouvé, ce qui attribuait silencieusement TOUTES les ventes de ce code au même compte,
+  // quel que soit le vrai vendeur — c'est précisément ce qui faisait apparaître le chiffre de
+  // CLIENTS COMPTOIRS en double (regroupé sur un seul compte, alors que chaque commercial a le sien
+  // dans la base). On choisit maintenant celui qui correspond réellement au commercial identifié
+  // via le centre de coût ; si on ne peut pas trancher sans ambiguïté, on garde l'ancien
+  // comportement (le premier) mais on le signale pour vérification manuelle plutôt que de se
+  // tromper silencieusement de compte.
+  const clientsByCode = new Map();
+  for(const c of APP.clients.values()){
+    if(!c.code) continue;
+    if(!clientsByCode.has(c.code)) clientsByCode.set(c.code, []);
+    clientsByCode.get(c.code).push(c);
+  }
   const groupes = [];
   for(const g of parGroupe.values()){
-    const client = [...APP.clients.values()].find(c=>c.code && c.code===g.code);
-    if(!client){ clientsIntrouvables.add(g.code + (g.nomClient?(' — '+g.nomClient):'')); continue; }
+    const candidats = clientsByCode.get(g.code) || [];
+    if(!candidats.length){ clientsIntrouvables.add(g.code + (g.nomClient?(' — '+g.nomClient):'')); continue; }
     if(!g.commercialId && g.centreCoutNom) commerciauxNonReconnus.add(g.centreCoutNom);
+    let client = candidats[0];
+    if(candidats.length > 1){
+      const correspondants = g.commercialId ? candidats.filter(c=>clientHasCommercial(c, g.commercialId)) : [];
+      if(correspondants.length===1) client = correspondants[0];
+      else clientsAmbigus.add(g.code + (g.nomClient?(' — '+g.nomClient):'') + (g.centreCoutNom?(' ('+g.centreCoutNom+')'):''));
+    }
     groupes.push({ clientId: client.id, clientNom: client.nom, date: g.date, factures: g.factures, total: g.factures.reduce((s,f)=>s+f.total,0), commercialId: g.commercialId, centreCoutNom: g.centreCoutNom });
   }
   const dates = [...new Set(factures.map(f=>f.date))].sort();
-  return { groupes, dates, minDate: dates[0], maxDate: dates[dates.length-1], clientsIntrouvables: [...clientsIntrouvables], commerciauxNonReconnus: [...commerciauxNonReconnus] };
+  return { groupes, dates, minDate: dates[0], maxDate: dates[dates.length-1], clientsIntrouvables: [...clientsIntrouvables], commerciauxNonReconnus: [...commerciauxNonReconnus], clientsAmbigus: [...clientsAmbigus] };
 }
 
 // Applique un groupe (un client, une date, un commercial identifié via le centre de coût, une ou

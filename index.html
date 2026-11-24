@@ -2754,10 +2754,10 @@ function drawSenegalMap(container, clients, user){
     const isExact = !clientPositionIsFallback(c);
     if(isExact) exactCount++;
     const dot = svgEl('circle', {cx:x,cy:y, r: isExact?3.4:2.2,
-      fill: isExact ? clientPrimaryZoneColor(c.secteur) : 'none',
+      fill: isExact ? (c.aFrigo ? 'var(--good)' : 'var(--warning)') : 'none',
       stroke: isExact ? 'var(--surface)' : 'var(--text-muted)', 'stroke-width':1,
       opacity: isExact?0.95:0.55, style:'cursor:pointer;'});
-    dot.addEventListener('mousemove', e=>showTooltip(tooltip, e, `${c.nom} — ${c.zone||c.secteur||''}${isExact?'':' · position non confirmée sur le terrain'}`));
+    dot.addEventListener('mousemove', e=>showTooltip(tooltip, e, `${c.nom} — ${c.zone||c.secteur||''}${c.aFrigo?' · frigo':' · sans frigo'}${isExact?'':' · position non confirmée sur le terrain'}`));
     dot.addEventListener('mouseleave', ()=>hideTooltip(tooltip));
     dot.addEventListener('click', ()=>openClientModal(c.id, user, false, true));
     svg.appendChild(dot);
@@ -2770,8 +2770,8 @@ function drawSenegalMap(container, clients, user){
   container.appendChild(cap);
   const legend = document.createElement('div');
   legend.style.cssText='display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;font-size:11px;color:var(--text-secondary);';
-  legend.innerHTML = `<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent);margin-right:4px;"></span>Position exacte confirmée (couleur = secteur)</span>
-    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;border:1.3px solid var(--text-muted);margin-right:4px;"></span>Point générique du secteur (non confirmée)</span>`;
+  legend.innerHTML = `<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--good);margin-right:4px;"></span>Avec frigo</span><span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--warning);margin-right:4px;"></span>Sans frigo</span>
+    <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;border:1.3px solid var(--text-muted);margin-right:4px;"></span>Position non confirmée sur le terrain</span>`;
   container.appendChild(legend);
 }
 

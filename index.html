@@ -2254,7 +2254,7 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
 
     <div class="card" style="padding:12px 14px;">
       <div class="card-title" style="margin-bottom:8px;">Historique des passages superviseur</div>
-      ${histFiches.length ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Heure</th><th>Superviseur</th><th>Mode</th><th>Commercial vérifié</th><th>Position</th></tr></thead><tbody>
+      ${histFiches.length ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Heure</th><th>Superviseur</th><th>Mode</th><th>Commercial vérifié</th><th>Produits présents</th><th>Position</th></tr></thead><tbody>
         ${histFiches.map(f=>{
           const sup = APP.profils.get(f.superviseurId);
           const co = f.commercialId ? APP.profils.get(f.commercialId) : null;
@@ -2264,7 +2264,7 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
           return `<tr><td>${fmtDateFR(f.date)}</td><td>${f.timestamp?fmtDateTimeFR(f.timestamp).split(' ')[1]||'—':'—'}</td>
           <td>${sup?escapeHtml(sup.nom):'—'}</td>
           <td>${modeLabel}</td>
-          <td>${f.commercialVerifie?'<span class="status-pill good">✓ Oui</span>':'<span class="status-pill muted">—</span>'}</td>
+          <td>${f.commercialVerifie?'<span class="status-pill good">✓ Oui</span>':'<span class="status-pill muted">—</span>'}</td><td class="helptext" style="max-width:160px;white-space:normal;">${(f.produitsPresents&&f.produitsPresents.length)?f.produitsPresents.map(id=>escapeHtml(produitNom(id))).join(', '):'—'}</td>
           <td>${positionBadge(f.gps)}</td></tr>`;
         }).join('')}
       </tbody></table></div>` : `<div class="helptext">Aucun passage superviseur enregistré pour ce client.</div>`}
@@ -4973,15 +4973,15 @@ function openSuperviseurHistoryModal(superviseurId, viewerUser){
         <div><div class="card-title" style="margin:0;">Fiches du ${fmtDateFR(selected)}</div>
           <span class="helptext">${day.length} fiche${day.length>1?'s':''} ce jour-là</span></div>
       </div>
-      <div class="table-wrap"><table><thead><tr><th>Mode</th><th>Commercial</th><th>Client / prospect</th><th>Vérifié</th><th>Prospects</th><th>Concurrence</th><th>Notes</th></tr></thead><tbody>
+      <div class="table-wrap"><table><thead><tr><th>Mode</th><th>Commercial</th><th>Client / prospect</th><th>Vérifié</th><th>Produits présents</th><th>Prospects</th><th>Concurrence</th><th>Notes</th></tr></thead><tbody>
         ${day.map(f=>{ const co=APP.profils.get(f.commercialId); const cl=APP.clients.get(f.clientId);
           const cible = cl ? escapeHtml(cl.nom) : ((f.clientsProspectes&&f.clientsProspectes[0]) ? escapeHtml(f.clientsProspectes[0].nom) : '—');
           return `<tr><td>${modeVisiteLabel(f.modeVisite, true)}</td><td>${co?escapeHtml(co.nom):'—'}</td><td>${cible}</td>
-          <td>${f.commercialVerifie?'<span class="status-pill good">✓</span>':'<span class="status-pill muted">—</span>'}</td>
+          <td>${f.commercialVerifie?'<span class="status-pill good">✓</span>':'<span class="status-pill muted">—</span>'}</td><td class="helptext" style="max-width:160px;white-space:normal;">${(f.produitsPresents&&f.produitsPresents.length)?f.produitsPresents.map(id=>escapeHtml(produitNom(id))).join(', '):'—'}</td>
           <td class="num">${(f.clientsProspectes||[]).length}</td>
           <td class="helptext" style="max-width:140px;white-space:normal;">${escapeHtml((f.concurrence||'').slice(0,80))||'—'}</td>
           <td class="helptext" style="max-width:180px;white-space:normal;">${escapeHtml((f.notes||'').slice(0,100))||'—'}</td></tr>`;
-        }).join('') || `<tr><td colspan="7" class="empty-state">Aucune fiche ce jour-là.</td></tr>`}
+        }).join('') || `<tr><td colspan="8" class="empty-state">Aucune fiche ce jour-là.</td></tr>`}
       </tbody></table></div>
     `;
   }

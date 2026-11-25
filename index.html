@@ -2734,7 +2734,7 @@ function projectGeo(lng, lat, bounds, w, h, pad){
   const offY = pad + (h-2*pad-spanY*scale)/2;
   return [offX + (lng-bounds.minLng)*cosLat*scale, offY + (bounds.maxLat-lat)*scale];
 }
-function drawSenegalMap(container, clients, user){
+function drawSenegalMap(container, clients, user, colorMode){ colorMode = colorMode || 'frigo';
   container.innerHTML = '';
   const W=320, H=300, PAD=12;
   const bounds = geoBoundsOf(SENEGAL_OUTLINE);
@@ -2754,7 +2754,7 @@ function drawSenegalMap(container, clients, user){
     const isExact = !clientPositionIsFallback(c);
     if(isExact) exactCount++;
     const dot = svgEl('circle', {cx:x,cy:y, r: isExact?3.4:2.2,
-      fill: isExact ? (c.aFrigo ? 'var(--good)' : 'var(--warning)') : 'none',
+      fill: isExact ? (colorMode==='secteur' ? clientPrimaryZoneColor(c.secteur) : (c.aFrigo ? 'var(--good)' : 'var(--warning)')) : 'none',
       stroke: isExact ? 'var(--surface)' : 'var(--text-muted)', 'stroke-width':1,
       opacity: isExact?0.95:0.55, style:'cursor:pointer;'});
     dot.addEventListener('mousemove', e=>showTooltip(tooltip, e, `${c.nom} — ${c.zone||c.secteur||''}${c.aFrigo?' · frigo':' · sans frigo'}${isExact?'':' · position non confirmée sur le terrain'}`));
@@ -2770,7 +2770,7 @@ function drawSenegalMap(container, clients, user){
   container.appendChild(cap);
   const legend = document.createElement('div');
   legend.style.cssText='display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;font-size:11px;color:var(--text-secondary);';
-  legend.innerHTML = `<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--good);margin-right:4px;"></span>Avec frigo</span><span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--warning);margin-right:4px;"></span>Sans frigo</span>
+  const secteursPresents = colorMode==='secteur' ? [...new Set(clients.map(c=>c.secteur).filter(Boolean))].sort() : []; const modeLegendHtml = colorMode==='secteur' ? secteursPresents.map(s=>`<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${clientPrimaryZoneColor(s)};margin-right:4px;"></span>${escapeHtml(s)}</span>`).join('') : `<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--good);margin-right:4px;"></span>Avec frigo</span><span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--warning);margin-right:4px;"></span>Sans frigo</span>`; legend.innerHTML = `${modeLegendHtml}
     <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;border:1.3px solid var(--text-muted);margin-right:4px;"></span>Position non confirmée sur le terrain</span>`;
   container.appendChild(legend);
 }
@@ -4594,7 +4594,7 @@ async function exportClientsQrPDF(clients, triggerBtn){
   if(triggerBtn){ triggerBtn.disabled = false; triggerBtn.innerHTML = origLabel; }
 }
 
-function renderClientsCarte(content, user){
+function renderClientsCarte(content, user){ let senegalColorMode = 'frigo';
   const isCommercial = user.role==='commercial';
   let list = isCommercial ? [...myClients(user.id), ...myProspects(user.id), ...myAValider(user.id)]
     : visibleClients().filter(c=>c.statut==='actif'||c.statut==='prospect'||c.statut==='a_valider');
@@ -4609,7 +4609,7 @@ function renderClientsCarte(content, user){
       </div>
     </div>
     <div class="grid-2">
-      <div class="card"><div class="card-title" style="margin-bottom:10px;">Carte du Sénégal</div><div id="senegal-map"></div></div>
+      <div class="card"><div class="card-head" style="margin-bottom:10px;"><div class="card-title" style="margin:0;">Carte du Sénégal</div><div style="display:flex;gap:6px;"><button class="btn sm" id="senegal-mode-frigo">Frigo</button><button class="btn ghost sm" id="senegal-mode-secteur">Secteur</button></div></div><div id="senegal-map"></div></div>
       <div class="card"><div class="card-title" style="margin-bottom:10px;">Carte détaillée — zones</div><div id="zone-map"></div></div>
     </div>
   `;
@@ -4619,13 +4619,13 @@ function renderClientsCarte(content, user){
     const s = content.querySelector('#filter-statut').value;
     const f = content.querySelector('#filter-frigo').value;
     let filtered = list.filter(c=> (!sec||c.secteur===sec) && (!s||c.statut===s) && (f===''|| (f==='1'?c.aFrigo:!c.aFrigo)) );
-    drawSenegalMap(content.querySelector('#senegal-map'), filtered, user);
+    drawSenegalMap(content.querySelector('#senegal-map'), filtered, user, senegalColorMode);
     drawZoneMap(content.querySelector('#zone-map'), filtered, user);
   }
   content.querySelector('#filter-secteur').addEventListener('change', apply);
   content.querySelector('#filter-statut').addEventListener('change', apply);
   content.querySelector('#filter-frigo').addEventListener('change', apply);
-  content.querySelector('#carte-export-kml').addEventListener('click', ()=> exportClientsKML(list));
+  content.querySelector('#carte-export-kml').addEventListener('click', ()=> exportClientsKML(list)); content.querySelector('#senegal-mode-frigo').addEventListener('click', ()=>{ senegalColorMode='frigo'; content.querySelector('#senegal-mode-frigo').className='btn sm'; content.querySelector('#senegal-mode-secteur').className='btn ghost sm'; apply(); }); content.querySelector('#senegal-mode-secteur').addEventListener('click', ()=>{ senegalColorMode='secteur'; content.querySelector('#senegal-mode-secteur').className='btn sm'; content.querySelector('#senegal-mode-frigo').className='btn ghost sm'; apply(); });
   apply();
 }
 

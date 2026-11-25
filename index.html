@@ -1657,7 +1657,7 @@ function renderImportVentes(content, user){
       <div><h1>Importer les ventes</h1>
         <p class="page-sub">Importez le fichier Excel des mouvements de ventes de l'ERP pour rattacher automatiquement chaque facture au passage du jour, sans ressaisie manuelle.</p></div>
     </div>
-    <div class="banner" style="margin-bottom:14px;">Rapprochement par date exacte, code client et commercial (identifié via la colonne « centre de coût » de l'ERP — pas seulement le commercial habituel du client, car plusieurs commerciaux peuvent se partager un même client). Une vente sans passage terrain ce jour-là est quand même enregistrée (marquée « sans passage »). Un passage qui ne reçoit aucune facture après l'import devient automatiquement « Non vendu ». Réimporter un fichier (ou un fichier dont la période chevauche un import précédent) ne crée pas de doublon.</div>
+    <div class="banner" style="margin-bottom:14px;">Rapprochement par date exacte, code client et commercial (identifié via la colonne « centre de coût » de l'ERP — pas seulement le commercial habituel du client, car plusieurs commerciaux peuvent se partager un même client). Une vente sans passage terrain ce jour-là est quand même enregistrée (marquée « sans passage »). Un passage qui ne reçoit aucune facture après l'import devient automatiquement « Non vendu ». Réimporter un fichier (ou un fichier dont la période chevauche un import précédent) ne crée pas de doublon. Une facture d'un compte « comptoir » qui correspond exactement (commercial, date, montant) à la vente déjà déclarée par un prospect en attente de code lui est automatiquement réattribuée, pour éviter de compter cette vente deux fois.</div>
     <div class="card" style="max-width:640px;">
       <div class="card-title" style="margin-bottom:8px;">Fichier Excel ERP (mouvements de ventes)</div>
       <input type="file" id="erp-file-input" accept=".xlsx,.xls">
@@ -1687,7 +1687,7 @@ function renderImportVentes(content, user){
     analyzeBtn.disabled = false; analyzeBtn.innerHTML = `${icon('download')} Analyser le fichier`;
   });
   function renderErpPreview(){
-    const { groupes, dates, clientsIntrouvables, commerciauxNonReconnus, clientsAmbigus } = analyse;
+    const { groupes, dates, clientsIntrouvables, commerciauxNonReconnus, clientsAmbigus, facturesAmbigues, nbReattribuees } = analyse;
     resultBox.innerHTML = `
       <div class="card" style="padding:12px 14px;border-color:var(--accent);">
         <div class="card-title" style="margin-bottom:8px;">Aperçu avant import</div>
@@ -1698,7 +1698,7 @@ function renderImportVentes(content, user){
         </div>
         ${clientsIntrouvables.length ? `<div class="helptext" style="margin-bottom:10px;">Codes non reconnus dans la base (vérifiez qu'ils correspondent bien à des comptes créés) : ${clientsIntrouvables.map(escapeHtml).join(', ')}</div>` : ''}
         ${commerciauxNonReconnus.length ? `<div class="helptext" style="margin-bottom:10px;">Nom de centre de coût non reconnu comme commercial (vente enregistrée sans commercial attribué, à vérifier manuellement) : ${commerciauxNonReconnus.map(escapeHtml).join(', ')}</div>` : ''}
-        ${clientsAmbigus && clientsAmbigus.length ? `<div class="helptext" style="margin-bottom:10px;color:var(--warning);">Code partagé par plusieurs comptes clients sans correspondance sûre avec le commercial identifié — attribué au premier compte par défaut, à vérifier après import : ${clientsAmbigus.map(escapeHtml).join(', ')}</div>` : ''}
+        ${clientsAmbigus && clientsAmbigus.length ? `<div class="helptext" style="margin-bottom:10px;color:var(--warning);">Code partagé par plusieurs comptes clients sans correspondance sûre avec le commercial identifié — attribué au premier compte par défaut, à vérifier après import : ${clientsAmbigus.map(escapeHtml).join(', ')}</div>` : ''}${nbReattribuees ? `<div class="helptext" style="margin-bottom:10px;color:var(--good);">${nbReattribuees} facture(s) de compte comptoir réattribuée(s) automatiquement au prospect correspondant (même commercial, même jour, même montant) plutôt que comptée(s) sur le compte comptoir.</div>` : ''}${facturesAmbigues && facturesAmbigues.length ? `<div class="helptext" style="margin-bottom:10px;color:var(--warning);">${facturesAmbigues.length} facture(s) de compte comptoir correspondent au montant de PLUSIEURS prospects différents le même jour chez le même commercial — laissée(s) sur le compte comptoir faute de pouvoir trancher automatiquement, à vérifier manuellement (avec le nom du client dans l'ERP) : ${facturesAmbigues.map(f=>`${fmtFCFA(f.montant)} le ${fmtDateFR(f.date)} (${f.candidats.map(escapeHtml).join(' / ')})`).join(' — ')}</div>` : ''}
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <button class="btn primary" id="erp-confirm-btn">${icon('check')} Confirmer l'import</button>
           <button class="btn ghost" id="erp-cancel-btn">Annuler</button>
@@ -1715,14 +1715,14 @@ function renderImportVentes(content, user){
     const cancelBtn = resultBox.querySelector('#erp-cancel-btn');
     if(confirmBtn) confirmBtn.disabled = true;
     if(cancelBtn) cancelBtn.disabled = true;
-    const stats = { rattachees:0, sansPassage:0, nonVendu:0 };
+    const stats = { rattachees:0, sansPassage:0, nonVendu:0, comptoirVide:0, reattribuees:0 };
     let i = 0;
     for(const g of analyse.groupes){
       i++;
       if(confirmBtn) confirmBtn.textContent = `Import en cours… (${i}/${analyse.groupes.length})`;
       try{
         const r = await applyErpGroupe(g);
-        if(r==='rattachee') stats.rattachees++; else if(r==='sans_passage') stats.sansPassage++;
+        if(r==='rattachee') stats.rattachees++; else if(r==='sans_passage') stats.sansPassage++; else if(r==='comptoir_vide') stats.comptoirVide++; if(g.reattribueDepuisComptoir && r==='rattachee') stats.reattribuees++;
       }catch(e){ toast(`Échec pour ${g.clientNom} : ${e.message||'erreur inconnue'}.`, 'critical'); }
     }
     try{
@@ -1731,7 +1731,7 @@ function renderImportVentes(content, user){
     resultBox.innerHTML = `
       <div class="card" style="padding:12px 14px;border-color:var(--good);">
         <div class="card-title" style="margin-bottom:8px;">${icon('check')} Import terminé</div>
-        <div class="helptext">${stats.rattachees} passage(s) rattaché(s) à une facture, ${stats.sansPassage} vente(s) enregistrée(s) sans passage terrain, ${stats.nonVendu} passage(s) marqué(s) « Non vendu » (aucune facture trouvée) sur la période ${analyse.dates.map(fmtDateFR).join(', ')}.</div>
+        <div class="helptext">${stats.rattachees} passage(s) rattaché(s) à une facture, ${stats.sansPassage} vente(s) enregistrée(s) sans passage terrain, ${stats.nonVendu} passage(s) marqué(s) « Non vendu » (aucune facture trouvée) sur la période ${analyse.dates.map(fmtDateFR).join(', ')}.${stats.reattribuees?` Dont ${stats.reattribuees} facture(s) de compte comptoir réattribuée(s) au bon prospect.`:''}${stats.comptoirVide?` ${stats.comptoirVide} compte(s) comptoir repassé(s) à « Non vendu » (toutes leurs factures appartenaient en fait à des prospects identifiés).`:''}</div>
       </div>
     `;
     toast('Import terminé.', 'good');
@@ -1786,7 +1786,7 @@ function resolveCommercialFromCentreCout(nomBrut){
 // groupe distinct : le commercial vendeur est identifié via la colonne "Nom du centre de coût" de
 // l'ERP, jamais via le commercial habituellement assigné au client. Ne modifie rien en base : sert
 // uniquement à préparer l'aperçu affiché avant confirmation.
-async function analyzeErpFile(file){
+function isClientComptoir(c){ /* Les comptes comptoir (ventes sans client identifié individuellement dans l'ERP, un compte par commercial/secteur, cf CLIENTS COMPTOIRS) sont repérés par le mot comptoir dans leur nom - rien d'autre ne les distingue dans la base. */ return /comptoir/i.test(c.nom||''); } async function analyzeErpFile(file){
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, {type:'array', cellDates:false});
   let sheetName = null;
@@ -1857,8 +1857,8 @@ async function analyzeErpFile(file){
     }
     groupes.push({ clientId: client.id, clientNom: client.nom, date: g.date, factures: g.factures, total: g.factures.reduce((s,f)=>s+f.total,0), commercialId: g.commercialId, centreCoutNom: g.centreCoutNom });
   }
-  const dates = [...new Set(factures.map(f=>f.date))].sort();
-  return { groupes, dates, minDate: dates[0], maxDate: dates[dates.length-1], clientsIntrouvables: [...clientsIntrouvables], commerciauxNonReconnus: [...commerciauxNonReconnus], clientsAmbigus: [...clientsAmbigus] };
+  /* Un prospect sans code peut voir sa vente facturée côté ERP sous un compte comptoir générique, faute de code client au moment de la facturation. Sans ce rapprochement, la même vente serait comptée deux fois : une fois via la vente déclarée sur le terrain par le commercial (en attente de création de compte), une seconde fois via l'import, côté compte comptoir. On recherche donc, pour chaque facture d'un compte comptoir, un prospect du même commercial avec une vente déjà enregistrée le même jour pour exactement le même montant ; si un seul correspond, la facture lui est réattribuée au lieu du compte comptoir. Si plusieurs prospects du même commercial ont déclaré le même montant le même jour, impossible de trancher sans le nom du client (non fourni ici) : la facture reste alors sur le compte comptoir et le cas est signalé pour vérification manuelle. */ const prospectsParCle = new Map(); for(const c of APP.clients.values()){ if(c.code || (c.statut!=='a_valider' && c.statut!=='prospect')) continue; for(const v of APP.visites.values()){ if(v.clientId!==c.id || v.statut!=='vendu') continue; const key = v.commercialId+'|'+v.date; if(!prospectsParCle.has(key)) prospectsParCle.set(key, []); prospectsParCle.get(key).push({ clientId: c.id, clientNom: c.nom, visiteId: v.id, montant: v.montantTotal }); } } const prospectsDejaUtilises = new Set(); const facturesAmbigues = []; const groupesReattribues = []; for(const g of groupes){ const clientComptoir = APP.clients.get(g.clientId); if(!clientComptoir || !isClientComptoir(clientComptoir) || !g.commercialId) continue; const candidatsCle = prospectsParCle.get(g.commercialId+'|'+g.date) || []; const restantes = []; for(const f of g.factures){ const correspondants = candidatsCle.filter(p=>!prospectsDejaUtilises.has(p.visiteId) && Math.abs(p.montant - f.total) < 1); if(correspondants.length===1){ const p = correspondants[0]; prospectsDejaUtilises.add(p.visiteId); groupesReattribues.push({ clientId: p.clientId, clientNom: p.clientNom, date: g.date, factures: [f], total: f.total, commercialId: g.commercialId, centreCoutNom: g.centreCoutNom, reattribueDepuisComptoir: true }); }else if(correspondants.length>1){ facturesAmbigues.push({ date: g.date, commercialId: g.commercialId, montant: f.total, factureNumero: f.numero, candidats: correspondants.map(p=>p.clientNom) }); restantes.push(f); }else{ restantes.push(f); } } g.factures = restantes; g.total = restantes.reduce((s,ff)=>s+ff.total, 0); } groupes.push(...groupesReattribues); const dates = [...new Set(factures.map(f=>f.date))].sort();
+  return { groupes, dates, minDate: dates[0], maxDate: dates[dates.length-1], clientsIntrouvables: [...clientsIntrouvables], commerciauxNonReconnus: [...commerciauxNonReconnus], clientsAmbigus: [...clientsAmbigus], facturesAmbigues, nbReattribuees: groupesReattribues.length };
 }
 
 // Applique un groupe (un client, une date, un commercial identifié via le centre de coût, une ou
@@ -1871,7 +1871,7 @@ async function analyzeErpFile(file){
 // même quand il n'a pas pu être résolu en commercial connu. Idempotent : réappliquer le même
 // groupe remplace simplement les mêmes factures (par numéro) sans dupliquer.
 async function applyErpGroupe(g){
-  const facturesPayload = g.factures.map(f=>({ numero: f.numero, lignes: f.lignes, total: f.total }));
+  if(!g.factures || !g.factures.length){ /* Toutes les factures de ce compte comptoir, pour ce commercial et cette date, ont été réattribuées à des prospects (voir analyzeErpFile) : il ne reste plus de vente comptoir réelle ce jour-là. Si une vente comptoir existait déjà pour cette date (réimport, ou import antérieur à cette correction), on la repasse à Non vendu plutôt que de la laisser à un montant obsolète. */ const visitesJour = [...APP.visites.values()].filter(v=>v.clientId===g.clientId && v.date===g.date); const visite = g.commercialId ? (visitesJour.find(v=>v.commercialId===g.commercialId) || null) : null; if(visite && visite.statut==='vendu'){ await dbUpdate('visites', visite.id, { statut: 'non_vendu', montantTotal: 0, factures: [], raisonNonAchat: "Facture(s) réattribuée(s) au(x) prospect(s) correspondant(s) (même commercial, même date, même montant)." }, APP.visites, `Import ventes — comptoir vidé ${g.clientNom}`); return 'comptoir_vide'; } return 'rien_a_faire'; } const facturesPayload = g.factures.map(f=>({ numero: f.numero, lignes: f.lignes, total: f.total }));
   const visitesJour = [...APP.visites.values()].filter(v=>v.clientId===g.clientId && v.date===g.date);
   let visite = null;
   if(g.commercialId){

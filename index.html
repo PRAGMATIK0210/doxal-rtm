@@ -2366,7 +2366,7 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
       jb.appendChild(it);
     });
     renderCiGpsBox();
-    box.querySelector('#ci-save').addEventListener('click', async ()=>{
+    box.querySelector('#ci-save').addEventListener('click', async ()=>{ const ciZoneVal = box.querySelector('#ci-zone').value; if(!ciZoneVal){ toast('Choisissez une zone.', 'warning'); return; } const ciTelVal = box.querySelector('#ci-tel').value.trim(); if(!ciTelVal){ toast('Le téléphone est requis.', 'warning'); return; } const ciNbVal = Number(box.querySelector('#ci-nb').value)||0; if(!ciNbVal){ toast('Le nombre de visites mensuelles est requis.', 'warning'); return; } if(!joursSet.size){ toast('Sélectionnez au moins un jour de visite.', 'warning'); return; }
       if(!APP.db) return;
       const payload = {
         zone: box.querySelector('#ci-zone').value || null,
@@ -3073,7 +3073,7 @@ function renderAvecProspect(box, content, user, commercialId){
     const nom = box.querySelector('#fap-nom').value.trim();
     if(!nom){ toast('Le nom du commerce est requis.', 'warning'); return; }
     const zone = box.querySelector('#fap-zone').value;
-    if(!zone){ toast('Choisissez une zone.', 'warning'); return; }
+    if(!zone){ toast('Choisissez une zone.', 'warning'); return; } if(!box.querySelector('#fap-adresse').value.trim()){ toast("L'adresse / repère est requise.", 'warning'); return; } if(!box.querySelector('#fap-contact').value.trim()){ toast('Le téléphone est requis.', 'warning'); return; }
     if(!confirmNoDoublon(nom)) return;
     const btn = box.querySelector('#fap-submit'); btn.disabled=true; btn.textContent='Enregistrement…';
     const fallback = SECTEUR_FALLBACK_COORD[secteur] || [DAKAR_COORD.lat, DAKAR_COORD.lng];
@@ -3260,7 +3260,7 @@ function renderSansProspect(box, content, user){
     if(!APP.db) return;
     const nom = box.querySelector('#fp-nom').value.trim();
     if(!nom){ toast('Le nom du commerce est requis.', 'warning'); return; }
-    const zone = zoneSel.value;
+    const zone = zoneSel.value; if(!zone){ toast('Choisissez une zone.', 'warning'); return; } if(!box.querySelector('#fp-adresse').value.trim()){ toast("L'adresse / repère est requise.", 'warning'); return; } if(!box.querySelector('#fp-contact').value.trim()){ toast('Le téléphone est requis.', 'warning'); return; }
     const secteur = secteurForZone(zone);
     const responsable = responsibleCommercialForZone(zone);
     if(!confirmNoDoublon(nom)) return;
@@ -4353,7 +4353,7 @@ function renderTourneeProspecter(body, user){
     if(!APP.db) return;
     const nom = body.querySelector('#tp-nom').value.trim();
     if(!nom){ toast('Le nom du commerce est requis.', 'warning'); return; }
-    const zone = body.querySelector('#tp-zone').value;
+    const zone = body.querySelector('#tp-zone').value; if(!zone){ toast('Choisissez une zone.', 'warning'); return; } if(!body.querySelector('#tp-adresse').value.trim()){ toast("L'adresse / repère est requise.", 'warning'); return; } if(!body.querySelector('#tp-tel').value.trim()){ toast('Le téléphone est requis.', 'warning'); return; }
     const secteur = user.secteur;
     const fallback = SECTEUR_FALLBACK_COORD[secteur] || [DAKAR_COORD.lat, DAKAR_COORD.lng];
     if(!confirmNoDoublon(nom)) return;

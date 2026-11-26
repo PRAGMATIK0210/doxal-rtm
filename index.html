@@ -1213,7 +1213,7 @@ function realizedForClientMonth(clientId, ym){
   return [...APP.visites.values()].filter(v=>v.clientId===clientId && v.statut==='vendu' && monthKey(v.date)===ym)
     .reduce((s,v)=>s+(v.montantTotal||0),0);
 }
-function suggestObjective(clientId){
+function startOfWeekDate(d){ const dt = new Date(d); const day = dt.getDay(); const diff = (day===0?-6:1-day); dt.setDate(dt.getDate()+diff); dt.setHours(0,0,0,0); return dt; } function salesForecast(f){ const now = todayDate(); const weekStart = startOfWeekDate(now); const weekStartISO = isoDate(weekStart); const todayIso = todayISO(); const joursEcoulesSemaine = Math.floor((now-weekStart)/86400000)+1; const caSemaine = filteredVisites({commercialId:f.commercialId, secteur:f.secteur, sinceISO:weekStartISO, toISO:todayIso}).filter(v=>v.statut==='vendu').reduce((s,v)=>s+(v.montantTotal||0),0); const previsionSemaine = joursEcoulesSemaine>0 ? caSemaine/joursEcoulesSemaine*7 : 0; const monthStart = new Date(now.getFullYear(), now.getMonth(), 1); const monthStartISO = isoDate(monthStart); const joursEcoulesMois = Math.floor((now-monthStart)/86400000)+1; const joursDansMois = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate(); const caMois = filteredVisites({commercialId:f.commercialId, secteur:f.secteur, sinceISO:monthStartISO, toISO:todayIso}).filter(v=>v.statut==='vendu').reduce((s,v)=>s+(v.montantTotal||0),0); const previsionMois = joursEcoulesMois>0 ? caMois/joursEcoulesMois*joursDansMois : 0; return {caSemaine, previsionSemaine, caMois, previsionMois}; } function computeChargementProposal(commercialId){ const depuis = periodCutoff(28); const visites = [...APP.visites.values()].filter(v=> v.commercialId===commercialId && v.statut==='vendu' && v.date>=depuis && (v.factures||[]).length); const parProduit = {}; const joursSet = new Set(); visites.forEach(v=>{ joursSet.add(v.date); (v.factures||[]).forEach(fa=>{ (fa.lignes||[]).forEach(l=>{ if(!l.produit) return; const nom = l.produit.toString().trim(); if(!nom) return; parProduit[nom] = (parProduit[nom]||0) + (Number(l.quantite)||0); }); }); }); const joursActifs = joursSet.size; const produits = Object.entries(parProduit).map(([nom, total])=>({ nom, total, propose: joursActifs ? Math.ceil(total/joursActifs) : 0 })).filter(p=>p.propose>0).sort((a,b)=> b.propose-a.propose); return { produits, joursActifs, depuis, aujourdHui: todayISO() }; } function openChargementModal(commercialId){ const commercial = APP.profils.get(commercialId); const data = computeChargementProposal(commercialId); const backdrop = document.createElement('div'); backdrop.className='modal-backdrop'; backdrop.addEventListener('click', e=>{ if(e.target===backdrop) backdrop.remove(); }); backdrop.innerHTML = `<div class="modal" style="max-width:560px;"><div class="modal-head"><h3>Proposition de chargement — ${escapeHtml(commercial?commercial.nom:'')}</h3><button class="modal-close" data-close>${icon('x')}</button></div>${!data.joursActifs ? `<div class="empty-state">Pas assez de ventes importées (avec détail produit) sur les 4 dernières semaines pour proposer un chargement.</div>` : `<p class="helptext" style="margin:0 0 10px;">Basé sur les ventes importées du ${fmtDateFR(data.depuis)} au ${fmtDateFR(data.aujourdHui)} (${data.joursActifs} jour${data.joursActifs>1?'s':''} de vente), quantité moyenne par jour actif, arrondie au-dessus.</p><div class="table-wrap"><table><thead><tr><th>Produit</th><th>Vendu (4 sem.)</th><th>À charger / jour</th></tr></thead><tbody>${data.produits.map(p=>`<tr><td>${escapeHtml(p.nom)}</td><td>${fmtNum(p.total)}</td><td><b>${fmtNum(p.propose)}</b></td></tr>`).join('')}</tbody></table></div>`}</div>`; document.body.appendChild(backdrop); backdrop.querySelector('[data-close]').addEventListener('click', ()=>backdrop.remove()); } function renderChargements(content, user){ if(user.role!=='adv' && user.role!=='direction'){ content.innerHTML = `<div class="empty-state">Accès réservé à l'ADV et à la direction.</div>`; return; } const commerciaux = [...APP.profils.values()].filter(p=>p.role==='commercial').sort((a,b)=> a.nom<b.nom?-1:1); content.innerHTML = `${demoBannerHTML()}<div class="page-head"><div><h1>Propositions de chargement</h1><p class="page-sub">Cliquez sur un commercial pour voir la quantité moyenne par produit à charger, basée sur ses ventes importées des 4 dernières semaines.</p></div></div><div class="card"><div class="table-wrap"><table><thead><tr><th>Commercial</th><th>Secteur</th></tr></thead><tbody>${commerciaux.map(p=>`<tr data-id="${p.id}" style="cursor:pointer;"><td>${escapeHtml(p.nom)}</td><td>${escapeHtml(p.secteur||'—')}</td></tr>`).join('')}</tbody></table></div></div>`; wireDemoBanner(content); content.querySelectorAll('tbody tr[data-id]').forEach(tr=> tr.addEventListener('click', ()=> openChargementModal(tr.getAttribute('data-id')))); } function suggestObjective(clientId){
   // Les clients équipés d'une vitrine et/ou d'un ou plusieurs congélateurs ont un objectif fixe
   // (et non calculé sur l'historique), basé sur leur équipement plutôt que sur leur volume d'achats
   // passé : voir frigoEquipementObjectif() (vitrine + somme des congélateurs selon leur capacité).
@@ -1463,7 +1463,7 @@ function navFor(user){
       {r:'#/comptes', l:'Comptes à créer', i:'idcard'},
       {r:'#/activite', l:'Activité générale', i:'journal'},
       {r:'#/prospection', l:'Suivi de la prospection', i:'userplus'},
-      {r:'#/superviseurs', l:'Suivi des superviseurs', i:'clipboard'},
+      {r:'#/superviseurs', l:'Suivi des superviseurs', i:'clipboard'}, {r:'#/chargements', l:'Propositions de chargement', i:'download'},
       {r:'#/pricing-suivi', l:'Suivi du pricing marché', i:'tag'},
       {r:'#/equipe', l:'Vue équipe', i:'team'},
       {r:'#/dashboard', l:'Tableau de bord', i:'chart'},
@@ -1485,7 +1485,7 @@ function navFor(user){
       {r:'#/pricing', l:'Pricing marché', i:'tag'},
       {r:'#/activite', l:'Activité générale', i:'journal'},
       {r:'#/prospection', l:'Suivi de la prospection', i:'userplus'},
-      {r:'#/superviseurs', l:'Suivi des superviseurs', i:'clipboard'},
+      {r:'#/superviseurs', l:'Suivi des superviseurs', i:'clipboard'}, {r:'#/chargements', l:'Propositions de chargement', i:'download'},
       {r:'#/pricing-suivi', l:'Suivi du pricing marché', i:'tag'},
       {r:'#/equipe', l:'Vue équipe', i:'team'},
       {r:'#/dashboard', l:'Tableau de bord', i:'chart'},
@@ -1513,7 +1513,7 @@ const PAGE_TITLES = {
   '#/mes-stats':'Mes statistiques', '#/fiche':'Fiche de suivi superviseur', '#/journal':'Journal d\'activité superviseur', '#/pricing':'Pricing marché', '#/equipe':'Vue équipe',
   '#/dashboard':'Tableau de bord', '#/comptes':'Comptes à créer', '#/activite':'Activité générale', '#/prospection':'Suivi de la prospection',
   '#/superviseurs':'Suivi des superviseurs', '#/scan':'Scanner un client', '#/import-ventes':'Importer les ventes',
-  '#/pricing-suivi':'Suivi du pricing marché',
+  '#/pricing-suivi':'Suivi du pricing marché', '#/chargements':'Propositions de chargement',
 };
 
 function renderShellHTML(user){
@@ -1606,7 +1606,7 @@ function renderRoute(content, user, route){
   if(route==='#/superviseurs') return renderSuiviSuperviseurs(content, user);
   if(route==='#/pricing-suivi') return renderSuiviPricing(content, user);
   if(route==='#/scan') return renderScanClient(content, user);
-  if(route==='#/import-ventes') return renderImportVentes(content, user);
+  if(route==='#/import-ventes') return renderImportVentes(content, user); if(route==='#/chargements') return renderChargements(content, user);
   content.innerHTML = `<div class="empty-state">Page introuvable.</div>`;
 }
 
@@ -1930,7 +1930,7 @@ function renderTournee(content, user){
         <p class="page-sub">${todayWeekdayFR()} · votre espace commercial</p></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="btn primary" id="go-scan">${icon('camera')} Scanner un client</button>
-        <button class="btn" id="go-historique">${icon('history')} Historique de mes tournées</button>
+        <button class="btn" id="go-historique">${icon('history')} Historique de mes tournées</button><button class="btn" id="go-chargement">${icon('download')} Proposition de chargement</button>
       </div>
     </div>
     <div class="chip-select" id="t-tabs" style="margin-bottom:16px;max-width:440px;">
@@ -1941,7 +1941,7 @@ function renderTournee(content, user){
   `;
   wireDemoBanner(content);
   const goHist = content.querySelector('#go-historique');
-  if(goHist) goHist.addEventListener('click', ()=>setRoute('#/historique'));
+  if(goHist) goHist.addEventListener('click', ()=>setRoute('#/historique')); const goChargement = content.querySelector('#go-chargement'); if(goChargement) goChargement.addEventListener('click', ()=>openChargementModal(user.id));
   const goScan = content.querySelector('#go-scan');
   if(goScan) goScan.addEventListener('click', ()=>{
     openQrScanner({
@@ -3895,7 +3895,7 @@ function renderDashboardBody(box, f){
 
   const ym = todayDate().getFullYear()+'-'+pad2(todayDate().getMonth()+1);
   const objPairs = baseClients.map(c=>({objectif:suggestObjective(c.id), realise:realizedForClientMonth(c.id, ym)}));
-  const objAvg = objPairs.length ? Math.round(objPairs.reduce((s,p)=>s+Math.min(100,(p.realise/Math.max(p.objectif,1))*100),0)/objPairs.length) : 0;
+  const objAvg = objPairs.length ? Math.round(objPairs.reduce((s,p)=>s+Math.min(100,(p.realise/Math.max(p.objectif,1))*100),0)/objPairs.length) : 0; const forecast = f.isAll ? salesForecast(f) : null;
 
   // Panier moyen : CA moyen par vente conclue sur la période.
   const panierMoyen = vendues.length ? ca/vendues.length : 0;
@@ -3933,7 +3933,7 @@ function renderDashboardBody(box, f){
       <div class="kpi-tile"><div class="kpi-label">Conversion prospects</div><div class="kpi-value">${tauxConversionProspects}%</div><div class="kpi-sub">${prospectsConvertis}/${prospectsPeriode.length} devenus clients actifs</div></div>
       <div class="kpi-tile"><div class="kpi-label">Nouveaux clients</div><div class="kpi-value">${nouveaux}</div><div class="kpi-sub">sur la période</div></div>
       <div class="kpi-tile"><div class="kpi-label">Clients avec frigo</div><div class="kpi-value">${withFrigo}%</div><div class="kpi-sub">${baseClients.filter(c=>c.aFrigo).length}/${baseClients.length}</div></div>
-      <div class="kpi-tile"><div class="kpi-label">Objectif atteint (moy.)</div><div class="kpi-value">${objAvg}%</div><div class="kpi-sub">mois en cours</div></div>
+      <div class="kpi-tile"><div class="kpi-label">Objectif atteint (moy.)</div><div class="kpi-value">${objAvg}%</div><div class="kpi-sub">mois en cours</div></div> ${forecast ? `<div class="kpi-tile"><div class="kpi-label">Prévision ventes (semaine)</div><div class="kpi-value">${fmtNum(forecast.previsionSemaine)}</div><div class="kpi-sub">FCFA · ${fmtNum(forecast.caSemaine)} réalisés depuis lundi</div></div><div class="kpi-tile"><div class="kpi-label">Prévision ventes (mois)</div><div class="kpi-value">${fmtNum(forecast.previsionMois)}</div><div class="kpi-sub">FCFA · ${fmtNum(forecast.caMois)} réalisés depuis le 1er</div></div>` : ''}
     </div>
     <div class="grid-2">
       <div class="card"><div class="card-title" style="margin-bottom:10px;">Évolution du CA</div><div id="chart-line"></div></div>

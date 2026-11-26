@@ -2167,7 +2167,7 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
   const existingToday = visiteToday(clientId, user.id);
   const commerciauxNoms = clientCommerciauxNoms(c);
 
-  const canEditInfo = !c.archive && ((user.role==='commercial' && clientHasCommercial(c, user.id)) || user.role==='superviseur');
+  const canEditInfo = !c.archive && ((user.role==='commercial' && clientHasCommercial(c, user.id)) || user.role==='superviseur' || user.role==='adv');
   const canRecordVisit = !c.archive && user.role==='commercial' && clientHasCommercial(c, user.id);
   const readOnlyViewer = user.role==='direction' || user.role==='adv';
   const canManageCommerciaux = !c.archive && user.role==='adv';
@@ -2320,7 +2320,7 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
   const editInfosBtn = backdrop.querySelector('#edit-infos');
   if(editInfosBtn) editInfosBtn.addEventListener('click', ()=>{
     const box = backdrop.querySelector('#infos-edit-box');
-    const zoneOpts = user.role==='superviseur' ? zonesForSecteur(c.secteur) : zonesForCommercial(user);
+    const zoneOpts = (user.role==='superviseur'||user.role==='adv') ? zonesForSecteur(c.secteur) : zonesForCommercial(user);
     let gpsCaptured = null;
     function renderCiGpsBox(){
       const gpsBox = box.querySelector('#ci-gps-box');
@@ -2348,7 +2348,7 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
     }
     box.innerHTML = `<div class="divider"></div>
       <div class="form-grid">
-        <label class="field">Zone<select id="ci-zone"><option value="">Choisir…</option>${zoneOpts.map(z=>`<option ${c.zone===z?'selected':''}>${escapeHtml(z)}</option>`).join('')}</select></label>
+${user.role==='adv' ? `<label class="field">Nom<input type="text" id="ci-nom" value="${escapeHtml(c.nom||'')}"></label><label class="field">Code client<input type="text" id="ci-code" style="text-transform:uppercase;" value="${escapeHtml(c.code||'')}"></label><label class="field">Secteur<select id="ci-secteur"><option value="">Choisir…</option>${SECTEUR_NAMES.map(s=>`<option ${c.secteur===s?'selected':''}>${escapeHtml(s)}</option>`).join('')}</select></label><label class="field">Adresse<input type="text" id="ci-adresse" value="${escapeHtml(c.adresse||'')}"></label>` : ''}        <label class="field">Zone<select id="ci-zone"><option value="">Choisir…</option>${zoneOpts.map(z=>`<option ${c.zone===z?'selected':''}>${escapeHtml(z)}</option>`).join('')}</select></label>
         <label class="field">Téléphone<input type="tel" id="ci-tel" placeholder="77 000 00 00" value="${escapeHtml(c.telephone||'')}"></label>
         <label class="field">Nombre de visites (par mois)<input type="number" min="0" id="ci-nb" value="${c.nombreVisites||''}"></label>
       </div>
@@ -2357,7 +2357,7 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
       </div>
       <div class="gps-box" id="ci-gps-box" style="margin-top:10px;"></div>
       <button class="btn primary sm" id="ci-save" style="margin-top:10px;">Enregistrer</button>`;
-    const joursSet = new Set(c.joursVisite||[]);
+    const joursSet = new Set(c.joursVisite||[]); const ciSecteurSel = box.querySelector('#ci-secteur'); if(ciSecteurSel) ciSecteurSel.addEventListener('change', ()=>{ const zoneSel = box.querySelector('#ci-zone'); const newZones = zonesForSecteur(ciSecteurSel.value); const curZone = zoneSel.value; zoneSel.innerHTML = `<option value="">Choisir…</option>` + newZones.map(z=>`<option ${curZone===z?'selected':''}>${escapeHtml(z)}</option>`).join(''); });
     const jb = box.querySelector('#ci-jours');
     JOURS_FR.forEach(j=>{
       const it = document.createElement('div'); it.className='checklist-item'+(joursSet.has(j)?' on':'');
@@ -2366,14 +2366,14 @@ function openClientModal(clientId, user, autoShowQr, scanMode){
       jb.appendChild(it);
     });
     renderCiGpsBox();
-    box.querySelector('#ci-save').addEventListener('click', async ()=>{ const ciZoneVal = box.querySelector('#ci-zone').value; if(!ciZoneVal){ toast('Choisissez une zone.', 'warning'); return; } const ciTelVal = box.querySelector('#ci-tel').value.trim(); if(!ciTelVal){ toast('Le téléphone est requis.', 'warning'); return; } const ciNbVal = Number(box.querySelector('#ci-nb').value)||0; if(!ciNbVal){ toast('Le nombre de visites mensuelles est requis.', 'warning'); return; } if(!joursSet.size){ toast('Sélectionnez au moins un jour de visite.', 'warning'); return; }
+    box.querySelector('#ci-save').addEventListener('click', async ()=>{ const isAdvEdit = user.role==='adv'; const ciZoneVal = box.querySelector('#ci-zone').value; if(!isAdvEdit && !ciZoneVal){ toast('Choisissez une zone.', 'warning'); return; } const ciTelVal = box.querySelector('#ci-tel').value.trim(); if(!isAdvEdit && !ciTelVal){ toast('Le téléphone est requis.', 'warning'); return; } const ciNbVal = Number(box.querySelector('#ci-nb').value)||0; if(!isAdvEdit && !ciNbVal){ toast('Le nombre de visites mensuelles est requis.', 'warning'); return; } if(!isAdvEdit && !joursSet.size){ toast('Sélectionnez au moins un jour de visite.', 'warning'); return; } let ciNomVal='', ciCodeVal='', ciSecteurVal=null, ciAdresseVal=''; if(isAdvEdit){ ciNomVal = box.querySelector('#ci-nom').value.trim(); if(!ciNomVal){ toast('Le nom du client est requis.', 'warning'); return; } ciCodeVal = box.querySelector('#ci-code').value.trim().toUpperCase(); if(ciCodeVal && [...APP.clients.values()].some(cl=>cl.id!==clientId && cl.code===ciCodeVal)){ toast('Ce code est déjà utilisé par un autre client.', 'critical'); return; } ciSecteurVal = box.querySelector('#ci-secteur').value || null; ciAdresseVal = box.querySelector('#ci-adresse').value.trim(); }
       if(!APP.db) return;
       const payload = {
         zone: box.querySelector('#ci-zone').value || null,
         telephone: box.querySelector('#ci-tel').value.trim(),
         nombreVisites: Number(box.querySelector('#ci-nb').value)||0,
         joursVisite: [...joursSet],
-        ...(gpsCaptured ? {lat: gpsCaptured.lat, lng: gpsCaptured.lng} : {}),
+        ...(gpsCaptured ? {lat: gpsCaptured.lat, lng: gpsCaptured.lng} : {}), ...(isAdvEdit ? {nom: ciNomVal, code: ciCodeVal || null, secteur: ciSecteurVal, adresse: ciAdresseVal} : {}),
       };
       try{
         const r = await dbUpdate('clients_rtm', clientId, payload, APP.clients, `Infos client ${c.nom}`);

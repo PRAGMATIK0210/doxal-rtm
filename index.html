@@ -943,7 +943,7 @@ function restorePageFilterState(preserved){
   if(preserved.activeId){
     const toFocus = content.querySelector('#'+preserved.activeId);
     if(toFocus){
-      toFocus.focus();
+      toFocus.focus({preventScroll:true});
       if(preserved.selStart!=null && toFocus.setSelectionRange){ try{ toFocus.setSelectionRange(preserved.selStart, preserved.selEnd); }catch(e){} }
     }
   }

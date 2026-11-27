@@ -916,11 +916,11 @@ function capturePageFilterState(){
   content.querySelectorAll('input[type="date"], input[type="text"], input[type="search"], input[type="number"], select').forEach(fld=>{
     if(fld.id) values[fld.id] = fld.value;
   });
-  const active = document.activeElement;
+  const scrollTop = content.scrollTop; const active = document.activeElement;
   const activeId = (active && content.contains(active) && active.id) ? active.id : null;
   const hasSelection = activeId && 'selectionStart' in active;
   return {
-    route: APP.route, values, activeId,
+    route: APP.route, values, activeId, scrollTop,
     selStart: hasSelection ? active.selectionStart : null,
     selEnd: hasSelection ? active.selectionEnd : null,
   };
@@ -933,7 +933,7 @@ function capturePageFilterState(){
 function restorePageFilterState(preserved){
   if(!preserved || preserved.route !== APP.route) return;
   const content = document.getElementById('content');
-  if(!content) return;
+  if(!content) return; if(preserved.scrollTop!=null) content.scrollTop = preserved.scrollTop;
   Object.keys(preserved.values).forEach(id=>{
     const fld = content.querySelector('#'+id);
     if(!fld || fld.value === preserved.values[id]) return;

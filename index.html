@@ -500,7 +500,7 @@ function printComptesAValiderPDF(list){
       <div class="fiche-row"><span class="fiche-label">Zone</span><span class="fiche-value">${escapeHtml(c.zone||'—')}</span></div>
       <div class="fiche-row"><span class="fiche-label">Téléphone</span><span class="fiche-value">${escapeHtml(c.telephone||'—')}</span></div>
       <div class="fiche-row"><span class="fiche-label">Commercial</span><span class="fiche-value">${escapeHtml(commercialNoms||'non assigné')}</span></div>
-      <div class="fiche-box"><div class="fiche-box-label">Numéro de compte client</div><div class="fiche-box-blank"></div></div>
+      <div class="fiche-row"><span class="fiche-label">En attente depuis</span><span class="fiche-value">${c.venteEnAttenteDate?fmtDateFR(c.venteEnAttenteDate):'—'}</span></div><div class="fiche-box"><div class="fiche-box-label">Numéro de compte client</div><div class="fiche-box-blank"></div></div>
     </div>`;
   }).join('');
   w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Fiches — Comptes à créer</title>
@@ -4692,25 +4692,25 @@ function renderClientsFrigo(content, user){
   apply();
 }
 
-function renderComptesAValider(content, user){
+function renderComptesAValider(content, user){ const pendingAllForFilters = visibleClients().filter(c=>c.statut==='a_valider'); const comptesCommercialMap = new Map(); pendingAllForFilters.forEach(c=> clientCommerciaux(c).forEach(id=>{ const p = APP.profils.get(id); if(p) comptesCommercialMap.set(id, p.nom); })); const comptesCommercialOptions = [...comptesCommercialMap.entries()].sort((a,b)=> a[1]<b[1]?-1:1).map(([id,nom])=>`<option value="${id}">${escapeHtml(nom)}</option>`).join('');
   const isAdv = user.role==='adv';
   content.innerHTML = `
     ${demoBannerHTML()}
     <div class="page-head"><div><h1>Comptes à créer</h1><p class="page-sub">${isAdv?'Ventes enregistrées par les commerciaux en attente d\'un code client et de la création du compte (ADV).':'Ventes enregistrées par les commerciaux en attente de la création du compte par l\'ADV (lecture seule).'}</p></div>${isAdv?`<button class="btn sm" id="print-comptes-btn">${icon('pdf')} Imprimer la liste</button>`:''}</div>
     ${isAdv ? `<div class="banner" style="margin-bottom:14px;">Un client passe à l'état « actif » uniquement après qu'un code lui a été attribué ici. Tant qu'aucun code n'est créé, le commercial le voit comme « en attente ». Si une de ces ventes en attente fait doublon avec un client déjà existant, utilisez « Supprimer ce doublon » plutôt que de lui créer un compte.</div>` : ''}
-    <div class="card" style="padding:10px 14px;margin-bottom:14px;"><label class="field" style="margin:0;">Rechercher un compte à créer<input type="text" id="comptes-search" placeholder="Nom, zone, téléphone ou commercial…"></label></div><div id="comptes-list"></div>
+    <div class="card" style="padding:10px 14px;margin-bottom:14px;"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;"><label class="field" style="margin:0;flex:1;min-width:220px;">Rechercher un compte à créer<input type="text" id="comptes-search" placeholder="Nom, zone, téléphone ou commercial…"></label><select id="comptes-commercial-filter"><option value="">Tous les commerciaux</option>${comptesCommercialOptions}</select>${dateRangeHTML('comptes', '', '')}</div><p class="helptext" style="margin:8px 0 0;">Ces filtres s'appliquent aussi à l'impression de la liste.</p></div><div id="comptes-list"></div>
   `;
   wireDemoBanner(content);
-  const printComptesBtn = content.querySelector('#print-comptes-btn'); const comptesSearchInput = content.querySelector('#comptes-search'); if(comptesSearchInput) comptesSearchInput.addEventListener('input', apply);
+  let comptesFilteredList = []; const printComptesBtn = content.querySelector('#print-comptes-btn'); const comptesSearchInput = content.querySelector('#comptes-search'); if(comptesSearchInput) comptesSearchInput.addEventListener('input', ()=>apply()); const comptesCommercialFilterSel = content.querySelector('#comptes-commercial-filter'); if(comptesCommercialFilterSel) comptesCommercialFilterSel.addEventListener('change', ()=>apply()); wireDateRange(content, 'comptes', ()=>apply());
   if(printComptesBtn) printComptesBtn.addEventListener('click', ()=>{
     const printList = visibleClients().filter(c=>c.statut==='a_valider')
       .sort((a,b)=> (a.venteEnAttenteDate||'') < (b.venteEnAttenteDate||'') ? 1 : -1);
-    printComptesAValiderPDF(printList);
+    printComptesAValiderPDF(comptesFilteredList);
   });
   function apply(){
-    const norm = s=>String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); const q = norm(content.querySelector('#comptes-search').value.trim()); const list = visibleClients().filter(c=>c.statut==='a_valider').filter(c=> !q || [c.nom, c.zone, c.secteur, c.telephone, clientCommerciauxNoms(c)].some(v=> v && norm(v).includes(q)))
+    const norm = s=>String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); const q = norm(content.querySelector('#comptes-search').value.trim()); const comptesCommercialFilterVal = content.querySelector('#comptes-commercial-filter').value; const compFromEl = content.querySelector('#comptes-from'); const compToEl = content.querySelector('#comptes-to'); const compFrom = (compFromEl && compFromEl.value) || '2000-01-01'; const compTo = (compToEl && compToEl.value) || todayISO(); const list = visibleClients().filter(c=>c.statut==='a_valider').filter(c=> !q || [c.nom, c.zone, c.secteur, c.telephone, clientCommerciauxNoms(c)].some(v=> v && norm(v).includes(q))).filter(c=> !comptesCommercialFilterVal || clientHasCommercial(c, comptesCommercialFilterVal)).filter(c=> !c.venteEnAttenteDate || (c.venteEnAttenteDate>=compFrom && c.venteEnAttenteDate<=compTo))
       .sort((a,b)=> (a.venteEnAttenteDate||'') < (b.venteEnAttenteDate||'') ? 1 : -1);
-    const box = content.querySelector('#comptes-list');
+    comptesFilteredList = list; const box = content.querySelector('#comptes-list');
     if(!list.length){ box.innerHTML = `<div class="empty-state">Aucun compte en attente de création pour l'instant.</div>`; return; }
     box.innerHTML = list.map(c=>{
       const commercialNoms = clientCommerciauxNoms(c);
